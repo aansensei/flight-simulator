@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AERONAUT: Wilderness Flight — Mô phỏng bay 3D Cessna 172 Skyhawk</title>
+  <style>
+    :root {
+      --bg-glass: rgba(13, 19, 28, 0.76);
+      --bg-glass-strong: rgba(10, 15, 23, 0.90);
+      --border-glass: rgba(148, 184, 224, 0.26);
+      --accent-primary: #38bdf8;
+      --accent-bright: #7dd3fc;
+      --accent-green: #34d399;
+      --accent-amber: #fbbf24;
+      --accent-danger: #ef4444;
+      --text-main: #f1f5f9;
+      --text-muted: #94a3b8;
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #0b1320;
+      color: var(--text-main);
+      font-family: var(--font-sans);
+    }
+
+    #flight-canvas {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      display: block;
+      outline: none;
+      cursor: grab;
+    }
+    #flight-canvas:active {
+      cursor: grabbing;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    /* Màn hình tải trạng thái thật */
+    #loading-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      background: radial-gradient(circle at 50% 40%, #162944 0%, #09101b 100%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      padding: 24px;
+      text-align: center;
+    }
+    .loader-spinner {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      border: 3px solid rgba(56, 189, 248, 0.22);
+      border-top-color: var(--accent-primary);
+      animation: spin 0.85s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .loader-title {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      color: #ffffff;
+    }
+    #loading-step-text {
+      font-size: 14px;
+      color: var(--accent-bright);
+      font-family: var(--font-mono);
+    }
+
+    /* Menu chính gọn gàng, đặt lệch bên trái để cảnh 3D hồ núi Alps là trọng tâm */
+    #main-menu-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 40;
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      padding: 28px 42px;
+      background: linear-gradient(90deg, rgba(7, 12, 20, 0.72) 0%, rgba(7, 12, 20, 0.24) 48%, rgba(7, 12, 20, 0.0) 100%);
+      pointer-events: auto;
+    }
+
+    .menu-card {
+      width: 438px;
+      max-width: 92vw;
+      max-height: 92vh;
+      overflow-y: auto;
+      background: var(--bg-glass);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border: 1px solid var(--border-glass);
+      border-radius: 14px;
+      padding: 22px 24px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .brand-tag {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 2.5px;
+      text-transform: uppercase;
+      color: var(--accent-primary);
+    }
+    .brand-title {
+      font-size: 24px;
+      font-weight: 800;
+      letter-spacing: 0.6px;
+      line-height: 1.15;
+      color: #ffffff;
+    }
+    .brand-sub {
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.45;
+    }
+
+    .btn-group {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .btn {
+      appearance: none;
+      border: 1px solid var(--border-glass);
+      background: rgba(30, 44, 66, 0.75);
+      color: var(--text-main);
+      font-family: var(--font-sans);
+      font-size: 13.5px;
+      font-weight: 600;
+      padding: 11px 14px;
+      border-radius: 9px;
+      cursor: pointer;
+      transition: all 0.16s ease;
+      text-align: center;
+    }
+    .btn:hover {
+      background: rgba(48, 72, 108, 0.9);
+      border-color: var(--accent-bright);
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #0284c7 0%, #2563eb 100%);
+      border-color: rgba(125, 211, 252, 0.5);
+      color: #ffffff;
+      box-shadow: 0 6px 18px rgba(2, 132, 199, 0.35);
+    }
+    .btn-primary:hover {
+      background: linear-gradient(135deg, #0369a1 0%, #1d4ed8 100%);
+    }
+    .btn-success {
+      grid-column: span 2;
+      background: linear-gradient(135deg, #059669 0%, #10b981 100%);
+      border-color: rgba(110, 231, 183, 0.5);
+      color: #ffffff;
+    }
+
+    .settings-section {
+      border-top: 1px solid rgba(148, 163, 184, 0.18);
+      padding-top: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+    }
+    .setting-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 13px;
+    }
+    .setting-row label {
+      color: #cbd5e1;
+      font-weight: 500;
+    }
+    .setting-row select, .setting-row input[type="range"] {
+      width: 210px;
+      background: rgba(15, 23, 42, 0.85);
+      color: #f8fafc;
+      border: 1px solid rgba(148, 163, 184, 0.32);
+      border-radius: 6px;
+      padding: 5px 8px;
+      font-size: 12.5px;
+    }
+    .setting-subinfo {
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--accent-bright);
+      text-align: right;
+    }
+    .checkbox-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 7px 12px;
+      margin-top: 2px;
+    }
+    .chk-item {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 12.5px;
+      color: #cbd5e1;
+      cursor: pointer;
+    }
+
+    /* HUD Tối giản, độ tương phản cao trên cả nền trời sáng lẫn rừng thông tối */
+    #hud-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      pointer-events: none;
+    }
+
+    .hud-box {
+      background: rgba(10, 16, 26, 0.68);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border: 1px solid rgba(148, 184, 224, 0.25);
+      border-radius: 10px;
+      padding: 10px 14px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.38);
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+    }
+
+    /* Thanh trên cùng: Compass Heading + Camera Mode + Nút thao tác nhanh */
+    .hud-top-bar {
+      position: absolute;
+      top: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      pointer-events: auto;
+    }
+    .hud-hdg-pill {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      font-family: var(--font-mono);
+    }
+    .hud-hdg-val {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--accent-amber);
+    }
+    .hud-mini-btn {
+      pointer-events: auto;
+      background: rgba(25, 38, 58, 0.8);
+      border: 1px solid rgba(148, 184, 224, 0.3);
+      color: #e2e8f0;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 6px 10px;
+      border-radius: 7px;
+      cursor: pointer;
+    }
+    .hud-mini-btn:hover {
+      border-color: var(--accent-primary);
+      color: #ffffff;
+    }
+
+    /* Cụm đồng hồ trái: Tốc độ không khí (IAS) */
+    .hud-left-cluster {
+      position: absolute;
+      left: 18px;
+      bottom: 18px;
+      width: 215px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    /* Cụm đồng hồ phải: Độ cao (MSL, AGL, VSI) */
+    .hud-right-cluster {
+      position: absolute;
+      right: 18px;
+      bottom: 18px;
+      width: 235px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    /* Cụm giữa dưới: Động cơ, Throttle, RPM, Flap, Trim */
+    .hud-center-bottom {
+      position: absolute;
+      bottom: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      font-family: var(--font-mono);
+    }
+
+    .metric-label {
+      font-size: 10.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--text-muted);
+    }
+    .metric-big {
+      font-family: var(--font-mono);
+      font-size: 26px;
+      font-weight: 800;
+      color: var(--accent-green);
+      line-height: 1.1;
+    }
+    .metric-unit {
+      font-size: 12px;
+      font-weight: 600;
+      color: #cbd5e1;
+      margin-left: 4px;
+    }
+    .metric-sub {
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      color: #cbd5e1;
+    }
+
+    .thr-bar-track {
+      width: 90px;
+      height: 8px;
+      background: rgba(15, 23, 42, 0.9);
+      border-radius: 4px;
+      overflow: hidden;
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      margin-top: 4px;
+    }
+    #hud-thr-bar {
+      height: 100%;
+      width: 68%;
+      background: linear-gradient(90deg, #38bdf8, #34d399);
+      transition: width 0.08s linear;
+    }
+
+    /* Cảnh báo STALL & Thông báo hạ cánh */
+    #stall-warning-banner {
+      position: absolute;
+      top: 76px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(220, 38, 38, 0.92);
+      border: 2px solid #fca5a5;
+      color: #ffffff;
+      font-family: var(--font-mono);
+      font-size: 16px;
+      font-weight: 800;
+      letter-spacing: 2px;
+      padding: 8px 22px;
+      border-radius: 8px;
+      box-shadow: 0 0 25px rgba(239, 68, 68, 0.7);
+      animation: pulseStall 0.45s ease-in-out infinite alternate;
+    }
+    @keyframes pulseStall {
+      from { opacity: 1.0; transform: translateX(-50%) scale(1.0); }
+      to { opacity: 0.65; transform: translateX(-50%) scale(0.97); }
+    }
+
+    #landing-banner {
+      position: absolute;
+      top: 126px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(5, 150, 105, 0.92);
+      border: 1px solid #6ee7b7;
+      color: #ffffff;
+      font-size: 14px;
+      font-weight: 700;
+      padding: 8px 18px;
+      border-radius: 8px;
+    }
+
+    #startup-hint-bar {
+      position: absolute;
+      bottom: 98px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(12, 19, 31, 0.80);
+      border: 1px solid rgba(125, 211, 252, 0.35);
+      color: #e2e8f0;
+      font-size: 12.5px;
+      padding: 7px 16px;
+      border-radius: 8px;
+      white-space: nowrap;
+    }
+
+    #quick-toast {
+      position: fixed;
+      top: 72px;
+      right: 20px;
+      z-index: 55;
+      background: var(--bg-glass-strong);
+      border: 1px solid var(--accent-primary);
+      color: #f8fafc;
+      font-size: 12.5px;
+      padding: 8px 14px;
+      border-radius: 8px;
+    }
+
+    /* Bảng thông tin hiệu năng (FPS, Render Size, Renderer) */
+    #perf-panel {
+      position: fixed;
+      top: 90px;
+      right: 18px;
+      z-index: 30;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      line-height: 1.45;
+      color: #cbd5e1;
+      padding: 7px 11px;
+      pointer-events: none;
+    }
+
+    /* Banner Tạm dừng & Modal Va chạm & Modal Hướng dẫn phím */
+    #pause-banner {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 35;
+      background: var(--bg-glass-strong);
+      border: 1px solid var(--border-glass);
+      padding: 18px 28px;
+      border-radius: 12px;
+      text-align: center;
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 60;
+      background: rgba(6, 10, 18, 0.72);
+      backdrop-filter: blur(6px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .modal-card {
+      width: 580px;
+      max-width: 94vw;
+      background: var(--bg-glass-strong);
+      border: 1px solid var(--border-glass);
+      border-radius: 14px;
+      padding: 22px 26px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65);
+    }
+    .key-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px 18px;
+      font-size: 13px;
+    }
+    .key-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+      padding-bottom: 5px;
+    }
+    kbd {
+      background: rgba(30, 41, 59, 0.95);
+      border: 1px solid rgba(148, 163, 184, 0.4);
+      border-radius: 5px;
+      padding: 2px 7px;
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      color: var(--accent-bright);
+    }
+  </style>
+</head>
+<body>
+  <!-- Màn hình tải trạng thái thực -->
+  <div id="loading-overlay">
+    <div class="loader-spinner"></div>
+    <div class="loader-title">AERONAUT: WILDERNESS FLIGHT</div>
+    <div id="loading-step-text">Đang khởi tạo hệ thống mô phỏng...</div>
+  </div>
+
+  <!-- Khung hình 3D WebGL 2 -->
+  <canvas id="flight-canvas" tabindex="0"></canvas>
+
+  <!-- Bảng thông tin hiệu năng & Renderer tùy chọn -->
+  <div id="perf-panel" class="hud-box">
+    <div><strong id="perf-fps" style="color:#34d399">60 FPS</strong> | <span id="perf-gpu">WebGL 2.0</span></div>
+    <div id="perf-timing">GPU đang đo...</div>
+    <div>Render nội bộ: <span id="perf-res">1280 × 720</span> | Đầu ra: <span id="perf-out">1280 × 720</span></div>
+  </div>
+
+  <!-- Menu chính tiếng Việt gọn gàng -->
+  <div id="main-menu-overlay">
+    <div class="menu-card">
+      <div>
+        <div class="brand-tag">Cessna 172S Skyhawk • Alpine Valley 60×60 km</div>
+        <h1 class="brand-title">AERONAUT: Wilderness Flight</h1>
+        <p class="brand-sub">Trải nghiệm bay tự do khám phá hồ nước và thung lũng núi Alps với mô hình khí động học 6-DOF có khối lượng, quán tính và buồng lái 3D tương tác.</p>
+      </div>
+
+      <div class="btn-group">
+        <button id="btn-resume-flight" class="btn btn-success hidden">Tiếp tục chuyến bay (P / Esc)</button>
+        <button id="btn-start-scenic" class="btn btn-success">Ngắm cảnh (tự bay, góc nhìn sạch)</button>
+        <button id="btn-start-airborne" class="btn btn-primary">Bắt đầu bay (Trên hồ)</button>
+        <button id="btn-start-runway" class="btn">Xuất phát từ đường băng</button>
+        <button id="btn-start-approach" class="btn">Luyện hạ cánh (đã căn đường băng)</button>
+      </div>
+
+      <div class="settings-section">
+        <div class="setting-row">
+          <label for="select-render-priority">Ưu tiên đồ họa</label>
+          <select id="select-render-priority"><option value="balanced">Mượt, tự điều chỉnh tới 60 FPS</option><option value="quality">Nét tối đa, giữ độ phân giải</option></select>
+        </div>
+        <p class="setting-subinfo">Chế độ Mượt hạ độ phân giải nội bộ khi GPU quá tải. Ảnh chụp vẫn dùng độ phân giải tối đa đã chọn.</p>
+        <div class="setting-row">
+          <label for="select-resolution">Độ phân giải render</label>
+          <select id="select-resolution"><option value="native">Theo màn hình</option><option value="4k">4K (tối đa 3840 × 2160)</option></select>
+        </div>
+        <div class="setting-row">
+          <label for="select-wind">Gió</label>
+          <select id="select-wind"><option value="calm">Trời lặng (dễ làm quen)</option><option value="breeze">Gió ngang nhẹ (cần bù hướng)</option></select>
+        </div>
+        <div class="checkbox-grid">
+          <label class="chk-item"><input id="chk-cinematic" type="checkbox" checked /> Màu camera, quầng sáng và hạt phim nhẹ</label>
+          <label class="chk-item"><input id="chk-mouse-flight" type="checkbox" /> Lái bằng chuột (tâm màn hình là trung tính)</label>
+        </div>
+        <div class="setting-row">
+          <label for="select-flight-mode">Chế độ điều khiển</label>
+          <select id="select-flight-mode">
+            <option value="assisted">Assisted (Ổn định bàn phím)</option>
+            <option value="simulation">Simulation (Điều khiển trực tiếp)</option>
+          </select>
+        </div>
+
+        <div class="setting-row">
+          <label for="select-quality">Chất lượng đồ họa</label>
+          <select id="select-quality">
+            <option value="low">Low (Nhẹ)</option>
+            <option value="medium">Medium (Cân bằng)</option>
+            <option value="high" selected>High (Sắc nét)</option>
+            <option value="ultra">Ultra (Chi tiết tối đa)</option>
+          </select>
+        </div>
+        <div id="quality-scale-info" class="setting-subinfo">Render Scale: 100% | Bóng đổ: 2048px | Cây: 9,000</div>
+
+        <div class="setting-row">
+          <label for="select-time">Thời gian & Ánh sáng</label>
+          <select id="select-time">
+            <option value="dawn">Bình minh hồng trên hồ</option>
+            <option value="noon">Giữa trưa trong xanh</option>
+            <option value="dusk">Chạng vạng xanh tím</option>
+            <option value="morning" selected>Buổi sáng nắng ấm (Mặc định)</option>
+            <option value="sunset">Hoàng hôn thung lũng Alps</option>
+          </select>
+        </div>
+
+        <div class="setting-row">
+          <label for="select-weather">Thời tiết</label>
+          <select id="select-weather"><option value="clear">Nắng, mây nhẹ</option><option value="haze">Sương mỏng trong thung lũng</option><option value="overcast">Trời nhiều mây</option><option value="rain">Mưa, mây xám và sương ẩm</option></select>
+        </div>
+        <label class="chk-item"><input id="chk-sharpen" type="checkbox" checked /> Tăng nét (không phải DLSS)</label>
+        <button id="btn-quality-max" class="btn">Chất lượng tối đa (4K + Ultra)</button>
+        <p class="setting-subinfo">DLSS chính thức không hỗ trợ WebGL. Bản web dùng render 4K, MSAA, FXAA và tăng nét. Chất lượng tối đa cần GPU mạnh.</p>
+        <div class="setting-row">
+          <label for="range-sensitivity">Độ nhạy điều khiển (<span id="val-sensitivity">100%</span>)</label>
+          <input id="range-sensitivity" type="range" min="0.5" max="1.6" step="0.05" value="1.0" />
+        </div>
+
+        <div class="setting-row">
+          <label for="range-fov">Góc nhìn FOV (<span id="val-fov">60°</span>)</label>
+          <input id="range-fov" type="range" min="45" max="80" step="1" value="60" />
+        </div>
+
+        <div class="checkbox-grid">
+          <label class="chk-item"><input id="chk-invert-pitch" type="checkbox" /> Đảo phím Pitch (W/S)</label>
+          <label class="chk-item"><input id="chk-cockpit-vib" type="checkbox" checked /> Rung buồng lái nhẹ</label>
+          <label class="chk-item"><input id="chk-sound" type="checkbox" checked /> Âm thanh động cơ (M)</label>
+          <label class="chk-item"><input id="chk-show-perf" type="checkbox" checked /> Hiện FPS & Renderer</label>
+        </div>
+      </div>
+
+      <button id="btn-menu-help" class="btn">Hướng dẫn bàn phím & Chuột (H)</button>
+    </div>
+  </div>
+
+  <!-- Giao diện HUD khi bay -->
+  <div id="hud-overlay" class="hidden">
+    <div class="hud-top-bar hud-box">
+      <div class="hud-hdg-pill">
+        <span class="metric-label">HDG</span>
+        <span id="hud-hdg" class="hud-hdg-val">000°</span>
+      </div>
+      <span id="hud-pitch-roll" class="metric-sub">Pitch +2.0° | Roll +0.0°</span>
+
+      <button id="btn-hud-camera" class="hud-mini-btn"><span id="hud-camera-mode">Góc nhìn: Sau máy bay (C)</span></button>
+      <button id="btn-hud-recenter" class="hud-mini-btn" title="Đưa góc nhìn về phía trước (X / Nháy đúp chuột)">Về hướng trước (X)</button>
+      <button id="btn-hud-help" class="hud-mini-btn">Phím tắt (H)</button>
+      <button id="btn-hud-menu" class="hud-mini-btn">Menu (Esc)</button>
+    </div>
+
+    <div id="stall-warning-banner" class="hidden">⚠ CẢNH BÁO THẤT TỐC (STALL) — HẠ MŨI & TĂNG GA!</div>
+    <div id="landing-banner" class="hidden"></div>
+
+    <div id="startup-hint-bar">
+      Giữ <strong>W / S</strong>: Chúi / Kéo mũi • <strong>A / D</strong>: Nghiêng cánh • <strong>Q / E</strong>: Rudder • <strong>Shift / Ctrl</strong>: Tăng / Giảm ga • <strong>G</strong>: Flap • <strong>C</strong>: Đổi Camera • <strong>H</strong>: Mở/Ẩn hướng dẫn
+    </div>
+
+    <!-- Cụm trái: Airspeed -->
+    <div class="hud-left-cluster hud-box">
+      <div class="metric-label">Tốc độ không khí (Indicated Airspeed)</div>
+      <div><span id="hud-ias" class="metric-big">97</span><span class="metric-unit">KTS (IAS)</span></div>
+      <div id="hud-tas-gs" class="metric-sub">TAS 98 | GS 97 kt</div>
+      <div id="hud-aoa-g" class="metric-sub" style="color:#7dd3fc">AoA 3.1° | 1.0G</div>
+    </div>
+
+    <!-- Cụm giữa dưới: Động cơ & Bề mặt điều khiển -->
+    <div class="hud-center-bottom hud-box">
+      <div>
+        <div class="metric-label">Ga (Throttle) <span id="hud-thr" style="color:#38bdf8">72%</span></div>
+        <div class="thr-bar-track"><div id="hud-thr-bar"></div></div>
+      </div>
+      <div>
+        <div class="metric-label">Động cơ</div>
+        <div class="metric-sub"><strong id="hud-rpm" style="color:#fbbf24;font-size:15px">2240</strong> RPM</div>
+      </div>
+      <div>
+        <div class="metric-label">Flap (G)</div>
+        <div id="hud-flaps" class="metric-sub" style="color:#34d399;font-weight:700">0°</div>
+      </div>
+      <div>
+        <div class="metric-label">Trim (T/Y)</div>
+        <div id="hud-trim" class="metric-sub">+4%</div>
+      </div>
+      <div>
+        <div class="metric-label">Chế độ bay</div>
+        <div id="hud-mode" class="metric-sub" style="color:#7dd3fc">Hỗ trợ ổn định (Assisted)</div>
+      </div>
+      <div id="hud-brake-badge" class="hidden" style="background:#ef4444;color:#fff;padding:3px 8px;border-radius:5px;font-size:11px;font-weight:700">
+        PHANH (B)
+      </div>
+    </div>
+
+    <!-- Cụm phải: Độ cao & VSI -->
+    <div class="hud-right-cluster hud-box">
+      <div class="metric-label">Độ cao mực nước biển (MSL)</div>
+      <div><span id="hud-msl" class="metric-big">2,505</span><span class="metric-unit">FT</span></div>
+      <div class="metric-sub">Trên địa hình (AGL): <strong id="hud-agl" style="color:#38bdf8">705 ft</strong></div>
+      <div class="metric-sub">Tốc độ đứng (VSI): <strong id="hud-vsi" style="color:#fbbf24">+0</strong> fpm</div>
+    </div>
+  </div>
+
+  <div id="quick-toast" class="hidden"></div>
+
+  <!-- Thông báo tạm dừng -->
+  <div id="pause-banner" class="hidden">
+    <div style="font-size:18px;font-weight:800;margin-bottom:6px">ĐANG TẠM DỪNG MÔ PHỎNG</div>
+    <div style="font-size:13px;color:#94a3b8">Nhấn <kbd>P</kbd> để tiếp tục bay hoặc <kbd>Esc</kbd> để mở Menu cài đặt.</div>
+  </div>
+
+  <!-- Modal Kết thúc lượt bay khi va chạm -->
+  <div id="crash-modal" class="modal-backdrop hidden">
+    <div class="modal-card" style="width:440px;text-align:center">
+      <div style="font-size:12px;font-weight:700;letter-spacing:2px;color:#ef4444;text-transform:uppercase">Kết thúc lượt bay</div>
+      <h2 style="font-size:22px;color:#ffffff">Máy bay đã gặp tai nạn</h2>
+      <p id="crash-reason-text" style="font-size:14px;color:#cbd5e1;line-height:1.5"></p>
+      <div class="btn-group" style="margin-top:8px">
+        <button id="btn-crash-restart-air" class="btn btn-primary">Bay lại trên hồ (R)</button>
+        <button id="btn-crash-menu" class="btn">Về menu / Ngắm cảnh</button>
+        <button id="btn-crash-restart-rwy" class="btn">Cất cánh từ đường băng</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Hướng dẫn bàn phím & chuột -->
+  <div id="help-modal" class="modal-backdrop hidden">
+    <div class="modal-card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h2 style="font-size:18px;color:#ffffff">Hướng dẫn Điều khiển Bàn phím & Chuột</h2>
+        <button id="btn-close-help" class="hud-mini-btn">Đóng (H)</button>
+      </div>
+      <p style="line-height:1.6;color:#bae6fd">Để làm quen: chọn Assisted và Trời lặng. Nhả A/D để máy bay tự giữ cánh ngang. Shift tăng ga, Ctrl giảm ga. Chọn Luyện hạ cánh để bắt đầu trên trục đường băng; xem chỉ dẫn ở góc dưới.</p>
+      <div class="key-grid">
+        <div class="key-row"><span>Chúi mũi xuống (Pitch Down)</span><span><kbd>W</kbd> / <kbd>↑</kbd></span></div>
+        <div class="key-row"><span>Kéo mũi lên (Pitch Up)</span><span><kbd>S</kbd> / <kbd>↓</kbd></span></div>
+        <div class="key-row"><span>Nghiêng cánh trái (Roll Left)</span><span><kbd>A</kbd> / <kbd>←</kbd></span></div>
+        <div class="key-row"><span>Nghiêng cánh phải (Roll Right)</span><span><kbd>D</kbd> / <kbd>→</kbd></span></div>
+        <div class="key-row"><span>Đạp Rudder trái / Lái mũi trái</span><span><kbd>Q</kbd></span></div>
+        <div class="key-row"><span>Đạp Rudder phải / Lái mũi phải</span><span><kbd>E</kbd></span></div>
+        <div class="key-row"><span>Tăng ga (Throttle +)</span><span><kbd>Shift</kbd> / <kbd>+</kbd></span></div>
+        <div class="key-row"><span>Giảm ga (Throttle -)</span><span><kbd>Ctrl</kbd> / <kbd>-</kbd></span></div>
+        <div class="key-row"><span>Chuyển nấc Flap (0°/10°/20°/30°)</span><span><kbd>G</kbd></span></div>
+        <div class="key-row"><span>Giữ phanh bánh xe trên mặt đất</span><span><kbd>B</kbd></span></div>
+        <div class="key-row"><span>Chỉnh Trim lên / xuống</span><span><kbd>T</kbd> / <kbd>Y</kbd></span></div>
+        <div class="key-row"><span>Đổi Camera (Sau máy bay / Buồng lái)</span><span><kbd>C</kbd></span></div>
+        <div class="key-row"><span>Xoay góc nhìn / Zoom khoảng cách</span><span>Giữ chuột phải / Cuộn chuột</span></div>
+        <div class="key-row"><span>Đưa góc nhìn về chính diện</span><span><kbd>X</kbd> / Nháy đúp chuột</span></div>
+        <div class="key-row"><span>Hiện / Ẩn HUD</span><span><kbd>V</kbd></span></div>
+        <div class="key-row"><span>Hiện / Ẩn bảng hướng dẫn này</span><span><kbd>H</kbd></span></div>
+        <div class="key-row"><span>Tạm dừng / Tiếp tục</span><span><kbd>P</kbd></span></div>
+        <div class="key-row"><span>Khởi động lại lượt bay</span><span><kbd>R</kbd></span></div>
+        <div class="key-row"><span>Toàn màn hình / Bật tắt tiếng</span><span><kbd>F</kbd> / <kbd>M</kbd></span></div>
+        <div class="key-row"><span>Mở Menu chính</span><span><kbd>Esc</kbd></span></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="scenic-toolbar" class="hud-box hidden" style="position:fixed;bottom:18px;left:50%;transform:translateX(-50%);padding:8px 12px;display:flex;gap:8px;align-items:center;z-index:25">
+    <span style="font-size:12px">Tự bay ngắm hồ · Chuột phải nhìn quanh · P dừng</span>
+    <button id="btn-scenic-menu" class="hud-mini-btn">Đổi ánh sáng / thời tiết</button>
+    <button id="btn-scenic-photo" class="hud-mini-btn">Chụp ảnh PNG</button>
+  </div>
+  <div id="landing-guide" class="hud-box hidden" style="position:fixed;right:18px;top:150px;max-width:300px;padding:14px;pointer-events:none;font-size:13px;line-height:1.55">
+    <strong style="color:#7dd3fc">HƯỚNG DẪN HẠ CÁNH · RWY 36</strong>
+    <div id="landing-instruction"></div>
+    <div id="landing-path" style="color:#a7f3d0"></div>
+    <div id="flight-envelope" style="color:#fbbf24"></div>
+  </div>
+  <div id="mouse-flight-reticle" class="hidden" style="pointer-events:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);color:#fff8;font-size:28px">⊕</div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
