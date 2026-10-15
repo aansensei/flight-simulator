@@ -657,6 +657,17 @@ export interface MaterialOptions {
   treeBillboard?: boolean;
 }
 
+export interface MaterialMap {
+  bytes: Uint8Array;
+  mimeType: string;
+  image: ImageBitmap | null;
+  glTexture: WebGLTexture | null;
+  wrapS: number;
+  wrapT: number;
+  minFilter: number;
+  magFilter: number;
+}
+
 export class Material {
   shaderType: MaterialShaderType;
   color: Color;
@@ -670,6 +681,11 @@ export class Material {
   canvasTexture: HTMLCanvasElement | null;
   foliage: boolean;
   treeBillboard: boolean;
+  baseColorMap: MaterialMap | null = null;
+  normalMap: MaterialMap | null = null;
+  metallicRoughnessMap: MaterialMap | null = null;
+  normalScale = 1;
+  alphaCutoff = -1;
   glTexture: WebGLTexture | null = null;
   textureNeedsUpdate = true;
 
@@ -1399,6 +1415,7 @@ export class WebGLRenderer {
       'uTreeBillboard', 'uTreeAtlas', 'uBakingTree',
       'uCameraPos', 'uSunDir', 'uSunColor', 'uSkyZenith', 'uSkyHorizon', 'uGroundColor',
       'uFogColor', 'uFogDensity', 'uCloudImmersion', 'uTime',
+      'uBaseMap', 'uNormalMap', 'uMetalRoughMap', 'uMaterialMaps', 'uNormalScale', 'uAlphaCutoff', 'uDoubleSided',
       'uBaseColor', 'uRoughness', 'uMetalness', 'uClearcoat', 'uOpacity', 'uEmissive',
       'uTerrainHeightField', 'uNeedlesColor', 'uNeedlesAlpha', 'uFoliage', 'uGrassColor', 'uRockColor', 'uRockNormal', 'uTerrainMaterials', 'uWaterCenter', 'uReflection', 'uReflectionMatrix', 'uClipWater', 'uCloudCover', 'uRain', 'uShadowMap', 'uTex', 'uUseVertexColor', 'uWaveLayers', 'uPostGrading'
     ];
@@ -1619,6 +1636,13 @@ export class WebGLRenderer {
       in vec3 vColor;
       in vec4 vLightSpacePos;
 
+      uniform sampler2D uBaseMap;
+      uniform sampler2D uNormalMap;
+      uniform sampler2D uMetalRoughMap;
+      uniform vec3 uMaterialMaps;
+      uniform float uNormalScale;
+      uniform float uAlphaCutoff;
+      uniform float uDoubleSided;
       uniform vec3 uBaseColor;
       uniform float uRoughness;
       uniform float uMetalness;
@@ -1648,15 +1672,33 @@ export class WebGLRenderer {
           return;
         }
         vec3 N = normalize(vNormal);
+        if (uDoubleSided > 0.5 && !gl_FrontFacing) N = -N;
+        vec4 baseSample = uMaterialMaps.x > 0.5 ? texture(uBaseMap, vUv) : vec4(1.0);
+        float coverage = baseSample.a * uOpacity;
+        if (uAlphaCutoff >= 0.0 && coverage < uAlphaCutoff) discard;
+        if (uMaterialMaps.y > 0.5) {
+          vec3 dp1 = dFdx(vWorldPos), dp2 = dFdy(vWorldPos);
+          vec2 uv1 = dFdx(vUv), uv2 = dFdy(vUv);
+          vec3 tangent = cross(dp2, N) * uv1.x + cross(N, dp1) * uv2.x;
+          vec3 bitangent = cross(dp2, N) * uv1.y + cross(N, dp1) * uv2.y;
+          float basisScale = inversesqrt(max(max(dot(tangent, tangent), dot(bitangent, bitangent)), 1e-12));
+          vec3 detail = texture(uNormalMap, vUv).xyz * 2.0 - 1.0;
+          detail.xy *= uNormalScale;
+          N = normalize(mat3(tangent * basisScale, bitangent * basisScale, N) * detail);
+        }
+        vec4 metalRough = uMaterialMaps.z > 0.5 ? texture(uMetalRoughMap, vUv) : vec4(1.0);
+        float roughness = clamp(uRoughness * metalRough.g, 0.04, 1.0);
+        float metalness = clamp(uMetalness * metalRough.b, 0.0, 1.0);
         bool needles = uFoliage > 0.5 && vColor.g > vColor.r * 1.15;
         float foliageCutoff = mix(0.24, 0.035, smoothstep(120.0, 1500.0, length(vWorldPos - uCameraPos)));
         if (needles && texture(uNeedlesAlpha, vUv).r < foliageCutoff) discard;
-        if (uFoliage > 0.5 && !gl_FrontFacing) N = -N;
+        if (uFoliage > 0.5 && uDoubleSided < 0.5 && !gl_FrontFacing) N = -N;
         vec3 V = normalize(uCameraPos - vWorldPos);
         vec3 L = normalize(uSunDir);
         vec3 H = normalize(V + L);
 
-        vec3 albedo = uBaseColor * mix(vec3(1.0), vColor, uUseVertexColor);
+        vec3 sampleLinear = mix(baseSample.rgb / 12.92, pow((baseSample.rgb + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), baseSample.rgb));
+        vec3 albedo = uBaseColor * sampleLinear * mix(vec3(1.0), vColor, uUseVertexColor);
         if (needles) albedo = pow(texture(uNeedlesColor, vUv).rgb, vec3(2.2)) * vColor * 2.8;
         float NdotL = max(dot(N, L), 0.0);
         float NdotV = max(dot(N, V), 0.001);
@@ -1666,17 +1708,17 @@ export class WebGLRenderer {
         float shadow = uBakingTree > 0.5 ? 1.0 : calcShadow(vLightSpacePos, N);
 
         // Cook-Torrance GGX approximation
-        float alpha = max(0.04, uRoughness * uRoughness);
+        float alpha = max(0.04, roughness * roughness);
         float alpha2 = alpha * alpha;
         float denom = (NdotH * NdotH * (alpha2 - 1.0) + 1.0);
         float D = alpha2 / max(3.14159 * denom * denom, 0.0001);
 
-        vec3 F0 = mix(vec3(0.04), albedo, uMetalness);
+        vec3 F0 = mix(vec3(0.04), albedo, metalness);
         vec3 F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
 
-        vec3 kD = (vec3(1.0) - F) * (1.0 - uMetalness);
+        vec3 kD = (vec3(1.0) - F) * (1.0 - metalness);
         vec3 diffuse = kD * albedo / 3.14159;
-        float geometryK = (uRoughness + 1.0) * (uRoughness + 1.0) / 8.0;
+        float geometryK = (roughness + 1.0) * (roughness + 1.0) / 8.0;
         float geometryL = NdotL / max(0.001, NdotL * (1.0 - geometryK) + geometryK);
         float geometryV = NdotV / max(0.001, NdotV * (1.0 - geometryK) + geometryK);
         vec3 spec = D * F * geometryL * geometryV / max(0.001, 4.0 * NdotL * NdotV);
@@ -1689,16 +1731,16 @@ export class WebGLRenderer {
         vec3 envAmbient = mix(uGroundColor, mix(uSkyHorizon, uSkyZenith, 0.45), hemiFactor) * 0.55;
         vec3 R = reflect(-V, N);
         vec3 envReflect = mix(uGroundColor, mix(uSkyHorizon, uSkyZenith, clamp(R.y, 0.0, 1.0)), smoothstep(-0.15, 0.35, R.y));
-        float envFresnel = (0.04 + 0.96 * pow(1.0 - NdotV, 5.0)) * (1.0 - uRoughness * 0.75);
+        float envFresnel = (0.04 + 0.96 * pow(1.0 - NdotV, 5.0)) * (1.0 - roughness * 0.75);
 
         vec3 color = (diffuse + spec + vec3(ccSpec)) * uSunColor * NdotL * shadow * 2.45;
         color += albedo * envAmbient;
-        color += envReflect * (envFresnel + uMetalness * 0.35 + uClearcoat * 0.22);
+        color += envReflect * (envFresnel + metalness * 0.35 + uClearcoat * 0.22);
         color += uEmissive;
 
         color = applyAtmosphericFog(color, vWorldPos);
         color = acesToneMapping(color);
-        fragColor = vec4(color, uOpacity);
+        fragColor = vec4(color, coverage);
       }
     `;
 
@@ -2336,6 +2378,27 @@ export class WebGLRenderer {
     this.reflectionPass = false;
   }
 
+  private bindPBRMap(map: MaterialMap | null, unit: number): boolean {
+    const gl = this.gl;
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    if (map?.image && !map.glTexture) {
+      map.glTexture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, map.glTexture);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, map.image);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, map.wrapS);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, map.wrapT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, map.minFilter);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, map.magFilter);
+      gl.generateMipmap(gl.TEXTURE_2D);
+      const anisotropy = gl.getExtension('EXT_texture_filter_anisotropic');
+      if (anisotropy) gl.texParameterf(gl.TEXTURE_2D, anisotropy.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(8, gl.getParameter(anisotropy.MAX_TEXTURE_MAX_ANISOTROPY_EXT)));
+    }
+    gl.bindTexture(gl.TEXTURE_2D, map?.glTexture || null);
+    return !!map?.glTexture;
+  }
+
   private drawMesh(m: Mesh, camera: PerspectiveCamera): void {
     const gl = this.gl;
     const mat = m.material;
@@ -2413,6 +2476,14 @@ export class WebGLRenderer {
     if (u['uNeedlesColor']) {
       gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D, this.foliageTextures[0]); gl.uniform1i(u['uNeedlesColor'], 7);
       gl.activeTexture(gl.TEXTURE8); gl.bindTexture(gl.TEXTURE_2D, this.foliageTextures[1]); gl.uniform1i(u['uNeedlesAlpha'], 8);
+      gl.activeTexture(gl.TEXTURE0);
+    }
+    if (u['uMaterialMaps']) {
+      const base = this.bindPBRMap(mat.baseColorMap, 12), normal = this.bindPBRMap(mat.normalMap, 13), metalRough = this.bindPBRMap(mat.metallicRoughnessMap, 14);
+      gl.uniform1i(u['uBaseMap'], 12); gl.uniform1i(u['uNormalMap'], 13); gl.uniform1i(u['uMetalRoughMap'], 14);
+      gl.uniform3f(u['uMaterialMaps'], Number(base), Number(normal), Number(metalRough));
+      gl.uniform1f(u['uNormalScale'], mat.normalScale); gl.uniform1f(u['uAlphaCutoff'], mat.alphaCutoff);
+      gl.uniform1f(u['uDoubleSided'], mat.doubleSided ? 1 : 0);
       gl.activeTexture(gl.TEXTURE0);
     }
     if (u['uBaseColor']) gl.uniform3f(u['uBaseColor'], mat.color.r, mat.color.g, mat.color.b);

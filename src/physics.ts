@@ -172,7 +172,7 @@ export class FlightPhysicsEngine {
       this.wasOnGround = false;
       this.touchdownChecked = true;
       if (spawn === 'archipelago') {
-        this.position.set(BAY_CENTER.x, 650, 9600);
+        this.position.set(BAY_CENTER.x, 480, 12800);
         this.velocity.set(0, 0, -55);
         this.throttle = 0.85;
       }

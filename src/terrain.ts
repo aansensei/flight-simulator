@@ -1,3 +1,4 @@
+import { detailedIslandsRoot, updateDetailedIslandLOD } from './detailed-islands';
 import { forestDensityAt } from './landcover';
 import { sampleAlpineElevation } from './elevation-data';
 import { createIslandGeometry, getIslandHeight, islands } from './archipelago';
@@ -191,6 +192,7 @@ export class WildernessEnvironment {
     karst.receiveShadow = true; this.root.add(karst);
     this.rebuildScalableAssets(quality);
     this.buildKarstVegetation();
+    this.root.add(detailedIslandsRoot);
   }
 
   private buildKarstVegetation(): void {
@@ -576,6 +578,7 @@ export class WildernessEnvironment {
   cloudCoverage = 0.38;
 
   update(time: number, windDirRad: number, windSpeedMs: number, focus?: Vector3): void {
+    if (focus) updateDetailedIslandLOD(focus);
     if (focus && this.nearWaterMesh) this.nearWaterMesh.position.set(Math.round(focus.x / 500) * 500, 0, Math.round(focus.z / 500) * 500);
     if (focus && this.treeInstancedMesh && this.farTreeMesh && focus.clone().sub(this.lastTreeFocus).lengthSq() > 3600) {
       this.lastTreeFocus.copy(focus);

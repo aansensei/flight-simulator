@@ -110,7 +110,17 @@ Rừng dùng ảnh cành thông và alpha atlas từ [Poly Haven Pine Tree 01](h
 
 Cơ sở sóng hình học và gợn nhỏ: [NVIDIA GPU Gems, Effective Water Simulation from Physical Models](https://developer.nvidia.com/gpugems/gpugems/part-i-natural-effects/chapter-1-effective-water-simulation-physical-models). Quan hệ tốc độ và độ cao tham khảo [FAA Airplane Flying Handbook, Energy Management](https://www.faa.gov/sites/faa.gov/files/regulations_policies/handbooks_manuals/aviation/airplane_handbook/05_afh_ch4.pdf). Tham khảo cảnh quan [UNESCO Ha Long Bay, Cat Ba Archipelago](https://whc.unesco.org/en/list/672/).
 
-Máy bay vẫn dựng từ hình học, cây thông dùng các cành ảnh chụp có alpha, bầu trời noise và phản chiếu phẳng. Đây chưa phải chất lượng quay từ camera thật, chưa có volumetric cloud ray marching hoặc ray tracing. [ASSET-PROMPTS.md](ASSET-PROMPTS.md) có prompt tạo thêm máy bay, đảo và texture, kèm định dạng và giới hạn tích hợp hiện tại.
+Skyhawk và Coastal vẫn dựng từ hình học, Ranger dùng mô hình GLB, cây thông dùng các cành ảnh chụp có alpha, bầu trời noise và phản chiếu phẳng. Đây chưa phải chất lượng quay từ camera thật, chưa có volumetric cloud ray marching hoặc ray tracing. [ASSET-PROMPTS.md](ASSET-PROMPTS.md) có prompt tạo thêm máy bay, đảo và texture, kèm định dạng và giới hạn tích hợp hiện tại.
+
+## Tài nguyên máy bay và đảo
+
+Ranger 260 STOL dùng mô hình GLB sơn trắng xanh rêu từ bộ tài nguyên AanSensei cung cấp. Mô hình có 6.096 tam giác, texture 2K cho màu, normal và độ nhám/kim loại. Cánh lái, flap, elevator, rudder, bánh mũi và cánh quạt nối với trạng thái mô phỏng. Càng chính được căn theo chiều cao tiếp đất của mô hình vật lý. Buồng lái giữ đồng hồ hoạt động và dùng vị trí mắt phù hợp với bảng điều khiển của Ranger.
+
+Chọn **Ranger 260 STOL**, rồi **Khám phá vịnh đảo đá vôi** để bay từ cửa vịnh qua sáu cụm đảo mới. **Ngắm vịnh (tự bay)** bắt đầu từ cùng khu vực và đi tiếp vào quần đảo. Đảo có ba mức chi tiết, tự giảm số tam giác ở khoảng cách 3,5 km và 8 km. Texture trùng nội dung được giải mã và cấp phát GPU một lần. Các đảo thủ tục hiện có vẫn tạo cảnh nền phía xa.
+
+Va chạm độ cao, camera và radar lấy mặt trên từ tam giác LOD0 đã biến đổi sang tọa độ thế giới. LOD hiển thị không thay đổi mặt va chạm. Đây vẫn là mô hình tiếp xúc địa hình theo chiều thẳng đứng, chưa mô phỏng bay xuyên hang đá hoặc va chạm với tán lá mềm. Mô hình được cung cấp là hình học thủ tục, chưa phải photogrammetry và không tạo chất lượng ảnh chụp chỉ bằng cách bật shader. Vật liệu ảnh Poly Haven đang dùng cho đất Alps được giữ lại.
+
+Bảy file GLB được đóng gói trong `public/assets/models`, không cần dịch vụ ngoài khi chơi. Lần đầu mở trang cần tải thêm khoảng 17 MB. Ghi nguồn do bộ tài nguyên cung cấp nằm trong `public/assets/models/CREDITS.md`. Bộ đọc hỗ trợ GLB tĩnh có tam giác, transform TRS, texture PNG/JPEG nhúng, UV0 và các chế độ alpha. Các định dạng nén, skin, animation clip và extension bắt buộc chưa được hỗ trợ. Cách đọc màu sRGB, normal và kênh G/B của roughness/metallic theo [đặc tả glTF 2.0 của Khronos](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#materials).
 
 ## Vật lý và giới hạn
 

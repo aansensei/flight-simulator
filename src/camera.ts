@@ -159,8 +159,10 @@ export class FlightCameraController {
       this.camera.position.copy(this.smoothedEye);
       this.camera.lookAt(this.smoothedTarget, this.smoothedUp);
     } else {
-      // Camera buồng lái (Cockpit Camera): Đặt tại vị trí mắt phi công ghế trái (x = -0.24m, y = 0.27m, z = -0.34m)
-      const pilotEyeLocal = new Vector3(-0.18, 0.25, -0.20);
+      // Vị trí mắt ghế trái phù hợp với bảng điều khiển của từng mẫu máy bay.
+      const pilotEyeLocal = settings.aircraftId === 'ranger'
+        ? new Vector3(-0.23, 0.57, -0.20)
+        : new Vector3(-0.18, 0.25, -0.20);
 
       // Hiệu ứng rung động cơ nhẹ + turbulence (có thể tắt trong cài đặt)
       if (settings.cockpitVibration) {
@@ -174,8 +176,8 @@ export class FlightCameraController {
 
       this.camera.position.copy(pilotEyeLocal).applyQuaternion(aircraftQuat).add(aircraftPos);
 
-      // Góc nhìn trong buồng lái kết hợp hướng máy bay + góc xoay đầu phi công bằng chuột (mặc định hơi nhìn xuống -4.5 độ để vừa thấy bầu trời vừa thấy rõ bảng đồng hồ)
-      this.tmpLookEuler.set(mousePitch - 0.14, mouseYaw, 0, 'YXZ');
+      // Góc cúi mặc định giữ đường băng và đồng hồ trong tầm nhìn, cộng góc nhìn quanh bằng chuột.
+      this.tmpLookEuler.set(mousePitch - (settings.aircraftId === 'ranger' ? 0.35 : 0.14), mouseYaw, 0, 'YXZ');
       this.tmpLookOffsetQuat.setFromEuler(this.tmpLookEuler);
       const combinedQuat = aircraftQuat.clone().multiply(this.tmpLookOffsetQuat);
 

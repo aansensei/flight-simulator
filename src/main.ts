@@ -1,3 +1,5 @@
+import { loadGLBFromUrl, ParsedGLBResult } from './gltf-loader';
+import { installDetailedIslands } from './detailed-islands';
 import { getLandcoverAtlas, loadLandcover } from './landcover';
 import { loadAlpineElevationData } from './elevation-data';
 import { AIRCRAFT_PROFILES, AircraftId } from './aircraft-specs';
@@ -35,6 +37,7 @@ export class AeronautWildernessApp {
   input!: InputController;
   audio!: FlightAudioEngine;
   private radar!: FlightRadar;
+  private rangerAsset!: ParsedGLBResult;
   private aircraftModels = new Map<AircraftId, Cessna172Model>();
 
   settings: UserSettings = {
@@ -92,6 +95,13 @@ export class AeronautWildernessApp {
       await loadAlpineElevationData();
       this.setLoadingStatus('Đang tải ảnh vệ tinh Sentinel vùng Alps, lần đầu cần tải thêm dữ liệu...');
       await loadLandcover((loaded, total) => this.setLoadingStatus(`Đang tải ảnh vệ tinh Sentinel: ${loaded}/${total} ô ảnh...`));
+      this.setLoadingStatus('Đang tải máy bay sơn xanh rêu và sáu cụm đảo đá vôi...');
+      const [aircraft, ...clusters] = await Promise.all([
+        loadGLBFromUrl('assets/models/sightseeing-aircraft.glb'),
+        ...Array.from({ length: 6 }, (_, i) => loadGLBFromUrl(`assets/models/islands/karst-island-0${i + 1}.glb`))
+      ]);
+      this.rangerAsset = aircraft;
+      installDetailedIslands(clusters);
       this.bootWithRealLoadingSteps();
     }
     catch (error) { this.showRuntimeError((error as Error).message); }
@@ -113,7 +123,7 @@ export class AeronautWildernessApp {
 
         this.setLoadingStatus('Đang dựng hình học 3D Cessna 172 Skyhawk & bảng đồng hồ buồng lái...');
         requestAnimationFrame(() => {
-          this.aircraft = new Cessna172Model(this.settings.aircraftId || 'skyhawk');
+          this.aircraft = this.createAircraftModel(this.settings.aircraftId || 'skyhawk');
           this.aircraftModels.set(this.settings.aircraftId || 'skyhawk', this.aircraft);
           this.scene.add(this.aircraft.root);
 
@@ -213,6 +223,12 @@ export class AeronautWildernessApp {
     });
   }
 
+  private createAircraftModel(id: AircraftId): Cessna172Model {
+    const model = new Cessna172Model(id);
+    if (id === 'ranger') model.applyParsedGLB(this.rangerAsset);
+    return model;
+  }
+
   private bindMenuDomEvents(): void {
     window.addEventListener('resize', () => {
       this.updateViewportSize();
@@ -225,7 +241,7 @@ export class AeronautWildernessApp {
       if (!Object.hasOwn(AIRCRAFT_PROFILES, id)) return;
       this.aircraft.root.visible = false;
       let model = this.aircraftModels.get(id);
-      if (!model) { model = new Cessna172Model(id); this.aircraftModels.set(id, model); this.scene.add(model.root); }
+      if (!model) { model = this.createAircraftModel(id); this.aircraftModels.set(id, model); this.scene.add(model.root); }
       this.aircraft = model;
       this.settings.aircraftId = id;
       const wind = this.physics.baseWindVel.clone(), gusts = this.physics.gustStrength;

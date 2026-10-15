@@ -1,3 +1,4 @@
+import { ParsedGLBResult } from './gltf-loader';
 import { AIRCRAFT_PROFILES, AircraftId } from './aircraft-specs';
 /**
  * AERONAUT: Wilderness Flight
@@ -856,8 +857,34 @@ export class Cessna172Model {
   }
 
   /**
-   * Hỗ trợ thay thế mô hình tự dựng bằng mô hình GLB bên ngoài nếu có trong tương lai
+   * Gắn mô hình Ranger và nối các khớp điều khiển với dữ liệu mô phỏng.
    */
+  applyParsedGLB(parsed: ParsedGLBResult): void {
+    const controls = ['AileronLeft', 'AileronRight', 'FlapLeft', 'FlapRight', 'Elevator', 'Rudder', 'NoseWheel', 'Propeller'];
+    for (const name of controls) if (!parsed.nodesByName.has(name)) throw new Error(`Missing aircraft control: ${name}`);
+    parsed.root.position.y = 0.07;
+    this.replaceWithExternalGLB(parsed.root);
+    this.aileronLeftPivot = parsed.nodesByName.get('AileronLeft') as Group;
+    this.aileronRightPivot = parsed.nodesByName.get('AileronRight') as Group;
+    this.flapLeftPivot = parsed.nodesByName.get('FlapLeft') as Group;
+    this.flapRightPivot = parsed.nodesByName.get('FlapRight') as Group;
+    this.elevatorPivot = parsed.nodesByName.get('Elevator') as Group;
+    this.rudderPivot = parsed.nodesByName.get('Rudder') as Group;
+    this.noseWheelPivot = parsed.nodesByName.get('NoseWheel') as Group;
+    this.propellerSolidGroup = parsed.nodesByName.get('Propeller') as Group;
+    this.propellerBlurMesh.position.copy(this.propellerSolidGroup.position);
+    this.propellerBlurMesh.position.y += 0.07;
+    this.propellerBlurMesh.position.z -= 0.04;
+    this.exteriorGroup.add(this.propellerBlurMesh);
+    this.propellers = [{ solid: this.propellerSolidGroup, blur: this.propellerBlurMesh }];
+    for (const child of [...this.cockpitGroup.children]) {
+      const animated = child === this.yokeLeftPivot || child === this.yokeRightPivot || child === this.throttleLeverMesh;
+      const instrument = child instanceof Mesh && child.material === this.panelMaterial;
+      if (instrument) child.position.set(0, 0.15, -0.795);
+      if (!animated && !instrument) this.cockpitGroup.remove(child);
+    }
+  }
+
   replaceWithExternalGLB(externalSceneRoot: Object3D): void {
     this.root.remove(this.exteriorGroup);
     this.exteriorGroup = new Group();

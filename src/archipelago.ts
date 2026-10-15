@@ -1,5 +1,7 @@
 import { BufferGeometry, GeometryBuilder, MathUtils } from './webgl2-three';
 
+import { getDetailedIslandHeight } from './detailed-islands';
+
 const SEGMENTS = 40;
 const CELL = 2000;
 export const BAY_CENTER = { x: 18200, z: 0 };
@@ -52,7 +54,7 @@ export function getIslandHeight(x: number, z: number): number {
     const c = island.samples[(iz + 1) * stride + ix + 1], d = island.samples[iz * stride + ix + 1];
     height = Math.max(height, fx + fz <= 1 ? a + (d - a) * fx + (b - a) * fz : c + (b - c) * (1 - fx) + (d - c) * (1 - fz));
   }
-  return height;
+  return Math.max(height, getDetailedIslandHeight(x, z));
 }
 
 export function createIslandGeometry(island: Island): BufferGeometry {
