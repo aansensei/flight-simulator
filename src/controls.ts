@@ -22,6 +22,7 @@ export interface InputActionCallbacks {
   onRestartFlight: () => void;
   onToggleFullscreen: () => void;
   onToggleMute: () => void;
+  onToggleRadar: () => void;
   onOpenMenuOrEscape: () => void;
   onRecenterCamera: () => void;
   onWindowBlur: () => void;
@@ -54,7 +55,7 @@ export class InputController {
       'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
       'Equal', 'NumpadAdd', 'Minus', 'NumpadSubtract',
       'KeyG', 'KeyB', 'KeyT', 'KeyY', 'KeyC', 'KeyH',
-      'ShiftLeft', 'ControlLeft', 'KeyV', 'KeyP', 'KeyR', 'KeyF', 'KeyM', 'KeyX', 'Space'
+      'ShiftLeft', 'ControlLeft', 'KeyV', 'KeyP', 'KeyR', 'KeyF', 'KeyM', 'KeyN', 'KeyX', 'Space'
     ]);
 
     window.addEventListener('keydown', (e: KeyboardEvent) => {
@@ -73,7 +74,8 @@ export class InputController {
         // Cho phép bấm P hoặc H ngay cả khi đang tạm dừng
         if (e.code === 'KeyP' && !e.repeat) this.callbacks.onTogglePause();
         if (e.code === 'KeyH' && !e.repeat) this.callbacks.onToggleHelp();
-        if (e.code === 'KeyM' && !e.repeat) this.callbacks.onToggleMute();
+        if (e.code === 'KeyM' && !e.repeat) this.callbacks.onToggleRadar();
+        if (e.code === 'KeyN' && !e.repeat) this.callbacks.onToggleMute();
         return;
       }
 
@@ -107,6 +109,9 @@ export class InputController {
             this.callbacks.onToggleFullscreen();
             break;
           case 'KeyM':
+            this.callbacks.onToggleRadar();
+            break;
+          case 'KeyN':
             this.callbacks.onToggleMute();
             break;
           case 'KeyX':

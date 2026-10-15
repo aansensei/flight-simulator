@@ -497,7 +497,28 @@
       font-size: 11.5px;
       color: var(--accent-bright);
     }
-  </style>
+  #radar-panel { position:fixed; top:16px; right:16px; width:244px; padding:10px; z-index:24; }
+    #radar-canvas { display:block; width:100%; height:auto; border-radius:8px; }
+    .radar-header { display:flex; justify-content:space-between; align-items:center; font-size:11px; color:#c5d9e2; gap:6px; }
+    .radar-header strong { letter-spacing:2px; color:#7de5ff; }
+    .radar-header button { background:#263c4d; color:white; border:1px solid #638393; border-radius:4px; width:25px; height:23px; cursor:pointer; margin-left:4px; }
+    #perf-panel { top:100px; right:auto; left:16px; max-width:360px; }
+    @media (max-width:1000px) { #radar-panel { top:100px; right:10px; width:178px; } }
+    @media (max-width:1000px) {
+      .hud-top-bar { left:12px; right:12px; transform:none; justify-content:space-between; gap:6px; }
+      .hud-mini-btn { font-size:10px; padding:6px; }
+      #hud-pitch-roll { display:none; }
+      #perf-panel { max-width:calc(100vw - 220px); font-size:10px; }
+      .hud-left-cluster { left:10px; bottom:12px; width:148px; }
+      .hud-right-cluster { right:10px; bottom:12px; width:170px; }
+      .hud-center-bottom { bottom:150px; padding:6px 10px; gap:12px; }
+      .metric-value { font-size:26px; }
+      .metric-label { font-size:9px; letter-spacing:0.2px; }
+      .metric-sub { font-size:10px; }
+      #startup-hint-bar { display:none; }
+      #scenic-toolbar { max-width:calc(100vw - 20px); width:max-content; flex-wrap:wrap; justify-content:center; }
+    }
+    </style>
 </head>
 <body>
   <!-- Màn hình tải trạng thái thực -->
@@ -521,7 +542,7 @@
   <div id="main-menu-overlay">
     <div class="menu-card">
       <div>
-        <div class="brand-tag">Cessna 172S Skyhawk • Alpine Valley 60×60 km</div>
+        <div class="brand-tag">3 máy bay • Alps và vịnh đá vôi • 120×120 km</div>
         <h1 class="brand-title">AERONAUT: Wilderness Flight</h1>
         <p class="brand-sub">Trải nghiệm bay tự do khám phá hồ nước và thung lũng núi Alps với mô hình khí động học 6-DOF có khối lượng, quán tính và buồng lái 3D tương tác.</p>
       </div>
@@ -535,6 +556,12 @@
       </div>
 
       <div class="settings-section">
+        <div class="setting-row">
+          <label for="select-aircraft">Máy bay</label>
+          <select id="select-aircraft"><option value="skyhawk">Cessna 172 · 180 HP</option><option value="ranger">Ranger 260 STOL · 260 HP</option><option value="coastal">Coastal Twin · 620 HP</option></select>
+        </div>
+        <p class="setting-subinfo">Ranger và Coastal là thiết kế giả lập. Giữ Shift tăng ga, giữ S để trợ lái leo ở tốc độ phù hợp khi flap 0°.</p>
+        <div class="btn-group"><button id="btn-start-archipelago" class="btn">Khám phá vịnh đảo đá vôi</button><button id="btn-scenic-bay" class="btn">Ngắm vịnh (tự bay)</button></div>
         <div class="setting-row">
           <label for="select-render-priority">Ưu tiên đồ họa</label>
           <select id="select-render-priority"><option value="balanced">Mượt, tự điều chỉnh tới 60 FPS</option><option value="quality">Nét tối đa, giữ độ phân giải</option></select>
@@ -602,11 +629,12 @@
         <div class="checkbox-grid">
           <label class="chk-item"><input id="chk-invert-pitch" type="checkbox" /> Đảo phím Pitch (W/S)</label>
           <label class="chk-item"><input id="chk-cockpit-vib" type="checkbox" checked /> Rung buồng lái nhẹ</label>
-          <label class="chk-item"><input id="chk-sound" type="checkbox" checked /> Âm thanh động cơ (M)</label>
+          <label class="chk-item"><input id="chk-sound" type="checkbox" checked /> Âm thanh động cơ (N)</label>
           <label class="chk-item"><input id="chk-show-perf" type="checkbox" checked /> Hiện FPS & Renderer</label>
         </div>
       </div>
 
+      <p class="setting-subinfo">Địa hình dựa trên DEM Alps, có điều chỉnh cho gameplay. <a href="https://registry.opendata.aws/terrain-tiles/" target="_blank" rel="noopener noreferrer">Mapzen Terrain Tiles</a> · Copernicus EU-DEM · USGS SRTM/GMTED2010. Vật liệu và ảnh cành cây: <a href="https://polyhaven.com/license" target="_blank" rel="noopener noreferrer">Poly Haven CC0</a>.</p>
       <button id="btn-menu-help" class="btn">Hướng dẫn bàn phím & Chuột (H)</button>
     </div>
   </div>
@@ -722,27 +750,27 @@
         <div class="key-row"><span>Đổi Camera (Sau máy bay / Buồng lái)</span><span><kbd>C</kbd></span></div>
         <div class="key-row"><span>Xoay góc nhìn / Zoom khoảng cách</span><span>Giữ chuột phải / Cuộn chuột</span></div>
         <div class="key-row"><span>Đưa góc nhìn về chính diện</span><span><kbd>X</kbd> / Nháy đúp chuột</span></div>
+        <div class="key-row"><span>Bật / Tắt radar</span><span><kbd>M</kbd></span></div>
         <div class="key-row"><span>Hiện / Ẩn HUD</span><span><kbd>V</kbd></span></div>
         <div class="key-row"><span>Hiện / Ẩn bảng hướng dẫn này</span><span><kbd>H</kbd></span></div>
         <div class="key-row"><span>Tạm dừng / Tiếp tục</span><span><kbd>P</kbd></span></div>
         <div class="key-row"><span>Khởi động lại lượt bay</span><span><kbd>R</kbd></span></div>
-        <div class="key-row"><span>Toàn màn hình / Bật tắt tiếng</span><span><kbd>F</kbd> / <kbd>M</kbd></span></div>
+        <div class="key-row"><span>Toàn màn hình / Bật tắt tiếng</span><span><kbd>F</kbd> / <kbd>N</kbd></span></div>
         <div class="key-row"><span>Mở Menu chính</span><span><kbd>Esc</kbd></span></div>
       </div>
     </div>
   </div>
 
   <div id="scenic-toolbar" class="hud-box hidden" style="position:fixed;bottom:18px;left:50%;transform:translateX(-50%);padding:8px 12px;display:flex;gap:8px;align-items:center;z-index:25">
-    <span style="font-size:12px">Tự bay ngắm hồ · Chuột phải nhìn quanh · P dừng</span>
+    <span style="font-size:12px">Tự bay ngắm cảnh · M bật / tắt radar · Chuột phải nhìn quanh · P dừng</span>
     <button id="btn-scenic-menu" class="hud-mini-btn">Đổi ánh sáng / thời tiết</button>
     <button id="btn-scenic-photo" class="hud-mini-btn">Chụp ảnh PNG</button>
   </div>
-  <div id="landing-guide" class="hud-box hidden" style="position:fixed;right:18px;top:150px;max-width:300px;padding:14px;pointer-events:none;font-size:13px;line-height:1.55">
-    <strong style="color:#7dd3fc">HƯỚNG DẪN HẠ CÁNH · RWY 36</strong>
-    <div id="landing-instruction"></div>
-    <div id="landing-path" style="color:#a7f3d0"></div>
-    <div id="flight-envelope" style="color:#fbbf24"></div>
-  </div>
+  <aside id="radar-panel" class="hud-box hidden" aria-label="Bản đồ radar">
+    <div class="radar-header"><strong>RADAR</strong><span>M bật / tắt</span></div>
+    <canvas id="radar-canvas" width="224" height="224" aria-label="Bản đồ hướng Bắc, vị trí máy bay và đường băng"></canvas>
+    <div class="radar-header"><span id="radar-range"></span><span><button id="radar-zoom-in" aria-label="Phóng to radar">+</button><button id="radar-zoom-out" aria-label="Thu nhỏ radar">−</button></span></div>
+  </aside>
   <div id="mouse-flight-reticle" class="hidden" style="pointer-events:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);color:#fff8;font-size:28px">⊕</div>
   <script type="module" src="/src/main.ts"></script>
 </body>

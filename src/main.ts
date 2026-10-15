@@ -1,3 +1,5 @@
+import { loadAlpineElevationData } from './elevation-data';
+import { AIRCRAFT_PROFILES, AircraftId } from './aircraft-specs';
 import { nextRenderScale } from './render-budget';
 /**
  * AERONAUT: Wilderness Flight
@@ -8,12 +10,13 @@ import { nextRenderScale } from './render-budget';
  * và vòng lặp mô phỏng chính.
  */
 
+import { FlightRadar } from './radar';
 import { ScenicPilot } from './scenic-pilot';
 import { Scene, WebGLRenderer, MathUtils, Color } from './webgl2-three';
 import {
   FlightMode, QUALITY_PRESETS, QualityPresetName, SpawnLocation, TimeOfDayPreset, UserSettings
 } from './types';
-import { getSurfaceHeight, RUNWAY_CONFIG, WORLD_SIZE, WildernessEnvironment } from './terrain';
+import { getTerrainHeight, WildernessEnvironment } from './terrain';
 import { Cessna172Model } from './aircraft-model';
 import { FlightPhysicsEngine } from './physics';
 import { InputController } from './controls';
@@ -30,8 +33,12 @@ export class AeronautWildernessApp {
   cameraCtrl!: FlightCameraController;
   input!: InputController;
   audio!: FlightAudioEngine;
+  private radar!: FlightRadar;
+  private aircraftModels = new Map<AircraftId, Cessna172Model>();
 
   settings: UserSettings = {
+    aircraftId: 'skyhawk',
+    showRadar: true,
     renderPriority: 'balanced',
     weather: 'clear',
     sharpen: true,
@@ -68,7 +75,7 @@ export class AeronautWildernessApp {
   constructor() {
     this.restoreSettings();
     this.canvas = document.getElementById('flight-canvas') as HTMLCanvasElement;
-    this.bootWithRealLoadingSteps();
+    void this.loadTerrainAndBoot();
     window.addEventListener('error', (event) => this.showRuntimeError(event.message));
     this.canvas.addEventListener('webglcontextlost', (event) => {
       event.preventDefault();
@@ -76,6 +83,12 @@ export class AeronautWildernessApp {
       if (this.input) this.input.isGameActive = false;
       this.showRuntimeError('GPU đã mất kết nối. Tải lại trang và chọn chất lượng thấp hơn.');
     });
+  }
+
+  private async loadTerrainAndBoot(): Promise<void> {
+    this.setLoadingStatus('Đang tải dữ liệu đo cao Alps và vật liệu cảnh quan...');
+    try { await loadAlpineElevationData(); this.bootWithRealLoadingSteps(); }
+    catch (error) { this.showRuntimeError((error as Error).message); }
   }
 
   private setLoadingStatus(stepText: string): void {
@@ -92,16 +105,20 @@ export class AeronautWildernessApp {
 
         this.setLoadingStatus('Đang dựng hình học 3D Cessna 172 Skyhawk & bảng đồng hồ buồng lái...');
         requestAnimationFrame(() => {
-          this.aircraft = new Cessna172Model();
+          this.aircraft = new Cessna172Model(this.settings.aircraftId || 'skyhawk');
+          this.aircraftModels.set(this.settings.aircraftId || 'skyhawk', this.aircraft);
           this.scene.add(this.aircraft.root);
 
-          this.setLoadingStatus('Đang kiến tạo địa hình thung lũng Alps 60×60 km, hồ nước, sân bay & rừng thông...');
+          this.setLoadingStatus('Đang kiến tạo địa hình thung lũng Alps 120×120 km, hồ nước, sân bay & rừng thông...');
           requestAnimationFrame(() => {
             const q = QUALITY_PRESETS[this.settings.quality];
             this.environment = new WildernessEnvironment(this.scene, q, this.renderer.gl);
-            this.physics = new FlightPhysicsEngine();
+            this.renderer.setTerrainHeightField(getTerrainHeight);
+            if (this.environment.forestGeometry) this.renderer.setForestGeometry(this.environment.forestGeometry);
+            this.physics = new FlightPhysicsEngine(this.settings.aircraftId);
             this.cameraCtrl = new FlightCameraController(window.innerWidth / Math.max(1, window.innerHeight));
             this.audio = new FlightAudioEngine();
+            this.radar = new FlightRadar();
 
             this.input = new InputController(this.canvas, {
               onCycleFlaps: () => {
@@ -132,9 +149,15 @@ export class AeronautWildernessApp {
               onToggleFullscreen: () => {
                 this.toggleFullscreen();
               },
+              onToggleRadar: () => {
+                this.settings.showRadar = !this.settings.showRadar;
+                this.saveSettings();
+                this.syncOverlays();
+              },
               onToggleMute: () => {
                 this.settings.soundEnabled = !this.settings.soundEnabled;
                 this.audio.setMuted(!this.settings.soundEnabled);
+                this.saveSettings();
                 this.syncMenuControls();
               },
               onOpenMenuOrEscape: () => {
@@ -164,7 +187,7 @@ export class AeronautWildernessApp {
             this.aircraft.root.useQuaternion = true;
             this.cameraCtrl.resetSnap(this.physics.renderPosition, this.physics.renderQuaternion);
 
-            // Ẩn màn hình tải sau khi mọi tài nguyên 3D đã thực sự sẵn sàng trên GPU
+            // Hình học và DEM sẵn sàng, ảnh vật liệu tiếp tục tải trong nền
             const loaderEl = document.getElementById('loading-overlay');
             if (loaderEl) loaderEl.classList.add('hidden');
 
@@ -187,6 +210,25 @@ export class AeronautWildernessApp {
       this.updateViewportSize();
     });
 
+    const aircraftSelect = document.getElementById('select-aircraft') as HTMLSelectElement;
+    aircraftSelect.value = this.settings.aircraftId || 'skyhawk';
+    aircraftSelect.addEventListener('change', () => {
+      const id = aircraftSelect.value as AircraftId;
+      if (!Object.hasOwn(AIRCRAFT_PROFILES, id)) return;
+      this.aircraft.root.visible = false;
+      let model = this.aircraftModels.get(id);
+      if (!model) { model = new Cessna172Model(id); this.aircraftModels.set(id, model); this.scene.add(model.root); }
+      this.aircraft = model;
+      this.settings.aircraftId = id;
+      const wind = this.physics.baseWindVel.clone(), gusts = this.physics.gustStrength;
+      this.physics = new FlightPhysicsEngine(id);
+      this.physics.baseWindVel.copy(wind); this.physics.gustStrength = gusts;
+      this.saveSettings();
+      document.getElementById('btn-resume-flight')?.classList.add('hidden');
+      this.showQuickToast(`Đã chọn ${AIRCRAFT_PROFILES[id].name}. Chọn điểm xuất phát để bay.`);
+    });
+    document.getElementById('btn-scenic-bay')?.addEventListener('click', () => this.startScenicFlight(true));
+    document.getElementById('btn-start-archipelago')?.addEventListener('click', () => this.startFlight('archipelago'));
     const btnStartAirborne = document.getElementById('btn-start-airborne');
     btnStartAirborne?.addEventListener('click', () => this.startFlight('airborne'));
 
@@ -385,6 +427,7 @@ export class AeronautWildernessApp {
 
     if (rebuildGeo && this.environment) {
       this.environment.rebuildScalableAssets(q);
+      if (this.environment.forestGeometry) this.renderer.setForestGeometry(this.environment.forestGeometry);
     }
 
     const scaleInfoEl = document.getElementById('quality-scale-info');
@@ -421,16 +464,17 @@ export class AeronautWildernessApp {
       r.fogDensity *= rainy ? 3.4 : 1.6;
     }
     this.environment.cloudCoverage = r.cloudCover;
+    this.renderer.invalidateForestAtlas();
     this.scene.background.copy(r.skyHorizonColor);
   }
 
-  private startScenicFlight(): void {
+  private startScenicFlight(bay = false): void {
     this.settings.flightMode = 'assisted';
-    this.startFlight('airborne');
-    this.physics.position.set(-220, 460, 1200);
+    this.startFlight(bay ? 'archipelago' : 'airborne');
+    if (!bay) this.physics.position.set(-220, 460, 1200);
     this.physics.prevPosition.copy(this.physics.position);
     this.physics.renderPosition.copy(this.physics.position);
-    this.scenicPilot.reset();
+    this.scenicPilot.reset(bay);
     this.scenicActive = true;
     this.settings.showHud = false; this.settings.showPerf = false;
     this.settings.showHelp = false;
@@ -560,6 +604,7 @@ export class AeronautWildernessApp {
     if (helpEl) helpEl.classList.toggle('hidden', !this.settings.showHelp);
     if (pauseBanner) pauseBanner.classList.toggle('hidden', this.isMenuOpen || !this.isPaused || this.physics.telemetry.crashed);
     if (crashModal) crashModal.classList.toggle('hidden', !this.physics.telemetry.crashed || this.isMenuOpen);
+    document.getElementById('radar-panel')?.classList.toggle('hidden', this.isMenuOpen || !this.settings.showRadar);
     if (perfPanel) perfPanel.classList.toggle('hidden', !this.settings.showPerf);
   }
 
@@ -639,39 +684,6 @@ export class AeronautWildernessApp {
     }
   }
 
-  private updateLandingGuide(): void {
-    const hidden = this.isMenuOpen || !this.settings.showHud;
-    document.getElementById('landing-guide')?.classList.toggle('hidden', hidden);
-    document.getElementById('mouse-flight-reticle')?.classList.toggle('hidden', hidden || !this.settings.mouseFlight);
-    if (hidden) return;
-    const p = this.physics.position;
-    const t = this.physics.telemetry;
-    const distance = p.z - RUNWAY_CONFIG.length / 2;
-    const lateral = p.x - RUNWAY_CONFIG.centerX;
-    const desiredY = RUNWAY_CONFIG.elevation + Math.max(0, distance) * Math.tan(MathUtils.degToRad(3)) + 1.5;
-    const heightError = p.y - desiredY;
-    const instruction = document.getElementById('landing-instruction')!;
-    const path = document.getElementById('landing-path')!;
-    if (t.onGround) {
-      instruction.textContent = 'Giảm ga bằng Ctrl. Giữ B để phanh. Q/E căn giữa đường băng. Cất cánh: Shift tăng ga, khoảng 55 kt kéo S nhẹ.';
-      path.textContent = `Tốc độ ${Math.round(t.iasKnots)} kt · Ga ${Math.round(t.throttle * 100)}%`;
-    } else if (distance > 0 && distance < 3800 && Math.abs(lateral) < 600 && (t.headingDeg < 45 || t.headingDeg > 315)) {
-      instruction.textContent = t.altitudeAglFeet < 30 && distance < 220
-        ? 'Kéo S rất nhẹ để nâng mũi, giảm ga về 0%. Sau khi bánh chạm đường băng, giữ B.'
-        : 'Giữ khoảng 65 kt, flap 20°. Ctrl giảm ga để hạ thấp, S kéo mũi nhẹ. A/D căn trục đường băng. Nếu mất ổn định: tăng ga và bay vòng lại.';
-      path.textContent = `Ngưỡng đường băng ${(distance / 1000).toFixed(2)} km · ${Math.abs(lateral) < 8 ? 'Đúng trục' : `Lệch ${lateral > 0 ? 'phải' : 'trái'} ${Math.round(Math.abs(lateral))} m`} · ${Math.abs(heightError) < 8 ? 'Đúng dốc 3°' : `${heightError > 0 ? 'Cao' : 'Thấp'} ${Math.round(Math.abs(heightError))} m`}`;
-    } else {
-      instruction.textContent = 'Để tập đáp dễ hơn: Esc → Luyện hạ cánh. Hoặc bay về phía nam đường băng, cách 2 đến 3 km, rồi quay hướng 000°.';
-      path.textContent = `Sân bay cách ${(Math.hypot(lateral, p.z) / 1000).toFixed(1)} km`;
-    }
-    const warnings: string[] = [];
-    if (t.isStallWarning) warnings.push('STALL: hạ mũi và tăng ga');
-    if (t.iasKnots > 163) warnings.push('Quá tốc độ: giảm ga');
-    if (t.flapDeg > 10 && t.iasKnots > 85) warnings.push('Thu flap khi vượt 85 kt');
-    if (Math.max(Math.abs(p.x), Math.abs(p.z)) > WORLD_SIZE * 0.46) warnings.push('Gần rìa bản đồ: quay về thung lũng');
-    document.getElementById('flight-envelope')!.textContent = warnings.join(' · ');
-  }
-
   private saveSettings(): void {
     try { localStorage.setItem('aeronaut.settings.v2', JSON.stringify(this.settings)); } catch { /* Storage may be disabled by the browser. */ }
   }
@@ -679,9 +691,10 @@ export class AeronautWildernessApp {
   private restoreSettings(): void {
     try {
       const saved = JSON.parse(localStorage.getItem('aeronaut.settings.v2') || '{}');
-      for (const key of ['sharpen', 'output4k', 'cinematic', 'mouseFlight', 'invertPitch', 'cockpitVibration', 'soundEnabled', 'showPerf'] as const) {
+      for (const key of ['showRadar', 'sharpen', 'output4k', 'cinematic', 'mouseFlight', 'invertPitch', 'cockpitVibration', 'soundEnabled', 'showPerf'] as const) {
         if (typeof saved[key] === 'boolean') this.settings[key] = saved[key];
       }
+      if (Object.hasOwn(AIRCRAFT_PROFILES, saved.aircraftId || '')) this.settings.aircraftId = saved.aircraftId;
       if (['balanced', 'quality'].includes(saved.renderPriority)) this.settings.renderPriority = saved.renderPriority;
       if (['clear', 'haze', 'overcast', 'rain'].includes(saved.weather)) this.settings.weather = saved.weather;
       if (Object.hasOwn(QUALITY_PRESETS, saved.quality)) this.settings.quality = saved.quality;
@@ -735,7 +748,7 @@ export class AeronautWildernessApp {
       const previewTime = this.renderer.elapsedTime;
       this.physics.renderPosition.set(
         -180 + Math.sin(previewTime * 0.18) * 18,
-        215 + Math.cos(previewTime * 0.35) * 2.5,
+        460 + Math.cos(previewTime * 0.35) * 2.5,
         760 - (previewTime * 14) % 900
       );
     }
@@ -777,7 +790,8 @@ export class AeronautWildernessApp {
     if (!this.isMenuOpen && now - this.lastHudUpdate >= 100) {
       this.lastHudUpdate = now;
       this.updateHudElements();
-      this.updateLandingGuide();
+      if (this.settings.showRadar) this.radar.update(this.physics.renderPosition, this.physics.telemetry.headingDeg);
+      document.getElementById('mouse-flight-reticle')?.classList.toggle('hidden', !this.settings.showHud || !this.settings.mouseFlight);
     }
     document.getElementById('scenic-toolbar')?.classList.toggle('hidden', !this.scenicActive || this.isMenuOpen);
     if (activeSim && this.settings.renderPriority !== 'quality') {

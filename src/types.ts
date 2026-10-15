@@ -9,7 +9,7 @@ export type CameraMode = 'chase' | 'cockpit';
 export type QualityPresetName = 'low' | 'medium' | 'high' | 'ultra';
 export type TimeOfDayPreset = 'dawn' | 'morning' | 'noon' | 'sunset' | 'dusk';
 export type WeatherPreset = 'clear' | 'haze' | 'overcast' | 'rain';
-export type SpawnLocation = 'airborne' | 'runway' | 'approach';
+export type SpawnLocation = 'airborne' | 'runway' | 'approach' | 'archipelago';
 
 export interface QualityConfig {
   label: string;
@@ -32,7 +32,7 @@ export const QUALITY_PRESETS: Record<QualityPresetName, QualityConfig> = {
     maxPixelRatio: 1.0,
     shadowMapSize: 512,
     terrainSegments: 180,
-    treeCount: 1200,
+    treeCount: 8000,
     rockCount: 180,
     cloudClusters: 35,
     waterWaveLayers: 1,
@@ -45,7 +45,7 @@ export const QUALITY_PRESETS: Record<QualityPresetName, QualityConfig> = {
     maxPixelRatio: 1.5,
     shadowMapSize: 1024,
     terrainSegments: 240,
-    treeCount: 2500,
+    treeCount: 20000,
     rockCount: 350,
     cloudClusters: 65,
     waterWaveLayers: 2,
@@ -58,7 +58,7 @@ export const QUALITY_PRESETS: Record<QualityPresetName, QualityConfig> = {
     maxPixelRatio: 2.0,
     shadowMapSize: 2048,
     terrainSegments: 360,
-    treeCount: 4500,
+    treeCount: 40000,
     rockCount: 600,
     cloudClusters: 105,
     waterWaveLayers: 4,
@@ -71,7 +71,7 @@ export const QUALITY_PRESETS: Record<QualityPresetName, QualityConfig> = {
     maxPixelRatio: 3.0,
     shadowMapSize: 4096,
     terrainSegments: 480,
-    treeCount: 12000,
+    treeCount: 100000,
     rockCount: 1000,
     cloudClusters: 150,
     waterWaveLayers: 4,
@@ -185,6 +185,8 @@ export interface TelemetryData {
 }
 
 export interface UserSettings {
+  aircraftId?: import('./aircraft-specs').AircraftId;
+  showRadar?: boolean;
   renderPriority?: 'balanced' | 'quality';
   weather?: WeatherPreset;
   sharpen?: boolean;

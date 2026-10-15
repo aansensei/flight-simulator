@@ -1,11 +1,13 @@
+import { sampleAlpineElevation } from './elevation-data';
+import { createIslandGeometry, getIslandHeight, islands } from './archipelago';
 import { spruceCrown } from './nature-geometry';
 /**
  * AERONAUT: Wilderness Flight
  * Module: src/terrain.ts
  *
- * Hệ thống Địa hình & Môi trường vùng núi Alps diện tích 60 × 60 km:
+ * Hệ thống Địa hình & Môi trường vùng núi Alps diện tích 120 × 120 km:
  * - Hồ lớn nằm trong thung lũng rộng + Sông uốn lượn nối các khu vực.
- * - Sân bay nhỏ (Alpine Airfield) có đường băng dài 1,100 m nằm trên khu đất bằng phẳng bên bờ đông hồ.
+ * - Sân bay nhỏ (Alpine Airfield) có đường băng dài 2.200 m nằm trên khu đất bằng phẳng bên bờ đông hồ.
  * - Rừng thông phân bố tự nhiên theo cụm bằng InstancedMesh (không mọc dưới nước, trên đường băng hay vách đá dựng đứng).
  * - Các công trình nhỏ (Nhà chứa máy bay Hangar, Tháp quan sát, Nhà gỗ Chalet ven hồ, Cột gió Windsock).
  * - Hệ thống mây 3D đa tầng có chiều sâu và tính toán mật độ mây khi bay xuyên qua.
@@ -17,7 +19,7 @@ import {
 } from './webgl2-three';
 import { QualityConfig } from './types';
 
-export const WORLD_SIZE = 60000; // 60 km × 60 km
+export const WORLD_SIZE = 120000; // 120 km × 120 km
 export const LAKE_LEVEL = 0.0;   // Mực nước hồ (0.0 m MSL = 1,800 ft Alpine Valley datum)
 export const VALLEY_DATUM_FEET = 1800; // Cao độ cơ sở của thung lũng so với mực nước biển (1,800 ft)
 
@@ -25,8 +27,8 @@ export const VALLEY_DATUM_FEET = 1800; // Cao độ cơ sở của thung lũng s
 export const RUNWAY_CONFIG = {
   centerX: 850.0,
   centerZ: 0.0,
-  width: 34.0,
-  length: 1120.0, // Đủ dài cho Cessna 172 cất/hạ cánh thoải mái (ground roll thực tế ~293m)
+  width: 48.0,
+  length: 2200.0,
   elevation: 16.0 // Cao hơn mặt hồ 16m trên thềm bình nguyên phẳng
 };
 
@@ -68,47 +70,23 @@ function fbmNoise(x: number, z: number, octaves = 5): number {
   return val;
 }
 
-function ridgedNoise(x: number, z: number, octaves = 4): number {
-  let val = 0;
-  let amp = 0.5;
-  let freq = 1.0;
-  let weight = 1.0;
-  for (let i = 0; i < octaves; i++) {
-    let signal = 1.0 - Math.abs(valueNoise2D(x * freq, z * freq) * 2.0 - 1.0);
-    signal = signal * signal * weight;
-    weight = MathUtils.clamp(signal * 1.8, 0.0, 1.0);
-    val += signal * amp;
-    freq *= 2.12;
-    amp *= 0.48;
-  }
-  return val;
-}
-
 /**
  * Hàm độ cao địa hình liên tục để tạo lưới hiển thị 3D
  */
-export function getTerrainHeight(x: number, z: number): number {
+function getMainlandHeight(x: number, z: number): number {
   // 1. Cấu trúc thung lũng & hồ trung tâm hình bầu dục kéo dài theo trục Bắc - Nam (Z)
-  const lakeNormX = (x + 220) / 1080;
+  const lakeCenter = -220 + Math.sin(z * 0.0011) * 125 + Math.sin(z * 0.0032) * 48;
+  const lakeNormX = (x - lakeCenter) / (1020 + Math.sin(z * 0.0018) * 110);
   const lakeNormZ = (z - 150) / 1850;
-  const lakeRadial = Math.sqrt(lakeNormX * lakeNormX + lakeNormZ * lakeNormZ);
+  const lakeRadial = Math.sqrt(lakeNormX * lakeNormX + lakeNormZ * lakeNormZ) + (fbmNoise(x * 0.0025 + 20, z * 0.0025, 3) - 0.45) * 0.15;
 
   // 2. Dãy núi Alps bao quanh thung lũng (nhiều tầng: đồi thông thấp -> sườn núi đá -> đỉnh tuyết cao)
   const valleyDist = Math.sqrt((x / 1450) * (x / 1450) + ((z - 100) / 2100) * ((z - 100) / 2100));
   const mountainEnvelope = MathUtils.smoothstep(0.52, 1.65, valleyDist);
 
-  const macroFbm = fbmNoise(x * 0.00042 + 11.4, z * 0.00042 + 7.2, 4);
-  const alpineRidges = ridgedNoise(x * 0.00075 - 3.7, z * 0.00075 + 5.1, 4);
   const foothillNoise = fbmNoise(x * 0.0018, z * 0.0018, 3);
-
-  let h = 18.0 + foothillNoise * 55.0;
-  h += mountainEnvelope * (macroFbm * 520.0 + alpineRidges * 820.0);
-
-  // Dãy núi cao hùng vĩ phía Bắc (trước mặt người chơi khi bắt đầu bay hướng -Z)
-  if (z < -950) {
-    const northFactor = MathUtils.smoothstep(-950, -3200, z);
-    h += northFactor * (220.0 + alpineRidges * 560.0);
-  }
+  const measuredRelief = Math.max(80, (sampleAlpineElevation(x, z) - 850) * 0.65);
+  let h = MathUtils.lerp(18 + foothillNoise * 45, measuredRelief, mountainEnvelope);
 
   // 3. Đào lòng hồ trung tâm (sâu xuống dưới mực nước y = 0)
   const lakeDepression = 1.0 - MathUtils.smoothstep(0.55, 1.18, lakeRadial);
@@ -123,23 +101,28 @@ export function getTerrainHeight(x: number, z: number): number {
     h = MathUtils.lerp(h, -6.5, riverMask * 0.85);
   }
 
-  // 5. Làm phẳng hoàn toàn khu vực Sân bay (Alpine Airfield) ở bờ đông hồ (x ≈ 850, z ∈ [-650, 650])
+  // 5. Làm phẳng hoàn toàn khu vực Sân bay (Alpine Airfield) ở bờ đông hồ (x ≈ 850, z ∈ [-1.100, 1.100])
   const dxRunway = Math.abs(x - RUNWAY_CONFIG.centerX);
   const dzRunway = Math.abs(z - RUNWAY_CONFIG.centerZ);
-  if (dxRunway < 280 && dzRunway < 880) {
-    const blendX = 1.0 - MathUtils.smoothstep(68.0, 260.0, dxRunway);
-    const blendZ = 1.0 - MathUtils.smoothstep(610.0, 860.0, dzRunway);
+  if (dxRunway < 420 && dzRunway < 1450) {
+    const blendX = 1.0 - MathUtils.smoothstep(260.0, 410.0, dxRunway);
+    const blendZ = 1.0 - MathUtils.smoothstep(1180.0, 1440.0, dzRunway);
     const runwayFlatten = blendX * blendZ;
     h = MathUtils.lerp(h, RUNWAY_CONFIG.elevation, runwayFlatten);
   }
 
   // The airfield sits in a continuous valley with clear runway approaches.
-  if (dxRunway < 420 && dzRunway < 4200) {
-    const corridor = (1 - MathUtils.smoothstep(70, 420, dxRunway)) * (1 - MathUtils.smoothstep(3300, 4200, dzRunway));
-    const corridorHeight = RUNWAY_CONFIG.elevation + Math.max(0, dzRunway - 560) * 0.025;
+  if (dxRunway < 420 && dzRunway < 6000) {
+    const corridor = (1 - MathUtils.smoothstep(70, 420, dxRunway)) * (1 - MathUtils.smoothstep(4500, 6000, dzRunway));
+    const corridorHeight = RUNWAY_CONFIG.elevation + Math.max(0, dzRunway - 1100) * 0.025;
     h = MathUtils.lerp(h, Math.min(h, corridorHeight), corridor);
   }
-  return h;
+  const coast = MathUtils.smoothstep(6200, 9000, x + Math.sin(z * 0.00035) * 650);
+  return MathUtils.lerp(h, -55, coast);
+}
+
+export function getTerrainHeight(x: number, z: number): number {
+  return Math.max(getMainlandHeight(x, z), getIslandHeight(x, z));
 }
 
 let surfaceCoordinates: Float32Array | null = null;
@@ -164,7 +147,8 @@ export function getSurfaceHeight(x: number, z: number): number {
   const fz = MathUtils.clamp((z - coordinates[iz]) / (coordinates[iz + 1] - coordinates[iz]), 0, 1);
   const a = heights[iz * count + ix], b = heights[(iz + 1) * count + ix];
   const c = heights[(iz + 1) * count + ix + 1], d = heights[iz * count + ix + 1];
-  return fx + fz <= 1 ? a + (d - a) * fx + (b - a) * fz : c + (b - c) * (1 - fx) + (d - c) * (1 - fz);
+  const mainland = fx + fz <= 1 ? a + (d - a) * fx + (b - a) * fz : c + (b - c) * (1 - fx) + (d - c) * (1 - fz);
+  return Math.max(mainland, getIslandHeight(x, z));
 }
 
 export function getTerrainNormal(x: number, z: number, outNormal = new Vector3()): Vector3 {
@@ -187,6 +171,7 @@ export class WildernessEnvironment {
   root = new Group();
   private terrainMesh: Mesh | null = null;
   private waterMesh: Mesh | null = null;
+  private nearWaterMesh: Mesh | null = null;
   private treeInstancedMesh: InstancedMesh | null = null;
   private farTreeMesh: InstancedMesh | null = null;
   private treeMatrices = new Float32Array();
@@ -200,8 +185,40 @@ export class WildernessEnvironment {
     scene.add(this.root);
     this.buildSkyAndWater();
     this.buildAirfieldAndStructures();
+    const karstMaterial = new Material({ shaderType: 'terrain' });
+    const karst = new Mesh(GeometryBuilder.mergeWithColors(islands.map(island => ({ geo: createIslandGeometry(island), color: new Color(0xffffff) }))), karstMaterial);
+    karst.receiveShadow = true; this.root.add(karst);
     this.rebuildScalableAssets(quality);
+    this.buildKarstVegetation();
   }
+
+  private buildKarstVegetation(): void {
+    const foliage = GeometryBuilder.createLoftedSections([
+      { z: -1, rx: 0.3, ryTop: 0.2, ryBot: 0.2, yOffset: 0, power: 1 },
+      { z: -0.4, rx: 0.95, ryTop: 0.8, ryBot: 0.3, yOffset: 0, power: 0.8 },
+      { z: 0.4, rx: 1, ryTop: 0.7, ryBot: 0.3, yOffset: 0, power: 0.8 },
+      { z: 1, rx: 0.25, ryTop: 0.15, ryBot: 0.15, yOffset: 0, power: 1 }
+    ], 8);
+    const canopy = new InstancedMesh(foliage, new Material({ color: 0x486a38, roughness: 0.95 }), islands.length * 56);
+    const transform = new Matrix4(), position = new Vector3(), scale = new Vector3(), rotation = new Quaternion(), tint = new Color();
+    let count = 0;
+    for (const island of islands) for (let i = 0; i < 56; i++) {
+      const x = island.x + (hash2D(island.seed, i * 3) * 2 - 1) * island.rx * 0.78;
+      const z = island.z + (hash2D(island.seed, i * 3 + 1) * 2 - 1) * island.rz * 0.78;
+      const y = getIslandHeight(x, z);
+      if (y < 25) continue;
+      const normal = getTerrainNormal(x, z);
+      if (normal.y < 0.65) continue;
+      const size = 4 + hash2D(island.seed + 70, i) * 8;
+      position.set(x, y + size * 0.12, z); scale.set(size, size * 0.8, size);
+      transform.compose(position, rotation, scale); canopy.setMatrixAt(count, transform);
+      const shade = 0.72 + hash2D(island.seed + 90, i) * 0.5;
+      tint.setRGB(shade * 0.85, shade, shade * 0.8); canopy.setColorAt(count++, tint);
+    }
+    canopy.count = count; this.root.add(canopy);
+  }
+
+  get forestGeometry(): BufferGeometry | null { return this.treeInstancedMesh?.geometry || null; }
 
   private releaseMesh(mesh: Mesh): void {
     if (!this.gl) return;
@@ -225,12 +242,15 @@ export class WildernessEnvironment {
     const waterGeo = GeometryBuilder.createPlane(WORLD_SIZE, WORLD_SIZE, 64, 64, false);
     const waterMat = new Material({
       shaderType: 'water',
+      roughness: 1,
       transparent: true,
       opacity: 0.94
     });
     this.waterMesh = new Mesh(waterGeo, waterMat);
     this.waterMesh.position.y = LAKE_LEVEL;
     this.root.add(this.waterMesh);
+    this.nearWaterMesh = new Mesh(GeometryBuilder.createPlane(8000, 8000, 256, 256, false), new Material({ shaderType: 'water', roughness: 0.1, transparent: true }));
+    this.root.add(this.nearWaterMesh);
   }
 
   private buildAirfieldAndStructures(): void {
@@ -250,13 +270,13 @@ export class WildernessEnvironment {
     // 2. Vạch kẻ đường băng trắng (Centerline, Thresholds & Aiming Point Markers)
     const stripeMat = new Material({ color: 0xefefef, roughness: 0.6, metalness: 0.02 });
     const dashGeo = GeometryBuilder.createPlane(0.85, 22.0, 1, 1, false);
-    for (let z = -480; z <= 480; z += 44) {
+    for (let z = -RUNWAY_CONFIG.length / 2 + 100; z <= RUNWAY_CONFIG.length / 2 - 100; z += 44) {
       const dash = new Mesh(dashGeo, stripeMat);
       dash.position.set(rx, ry + 0.12, rz + z);
       airfieldGroup.add(dash);
     }
     const threshGeo = GeometryBuilder.createPlane(1.4, 26.0, 1, 1, false);
-    for (const endZ of [-525, 525]) {
+    for (const endZ of [-RUNWAY_CONFIG.length / 2 + 35, RUNWAY_CONFIG.length / 2 - 35]) {
       for (let ix = -12; ix <= 12; ix += 3.2) {
         if (Math.abs(ix) < 2) continue;
         const bar = new Mesh(threshGeo, stripeMat);
@@ -266,31 +286,37 @@ export class WildernessEnvironment {
     }
 
     // 3. Đường lăn (Taxiway) & Sân đỗ (Apron) + Nhà chứa máy bay (Hangar) + Tháp điều khiển nhỏ
-    const apronGeo = GeometryBuilder.createPlane(55, 110, 2, 2, false);
+    const apronGeo = GeometryBuilder.createPlane(180, 320, 2, 2, false);
     const apronMesh = new Mesh(apronGeo, rwyMat);
-    apronMesh.position.set(rx + 46, ry + 0.07, rz + 120);
+    apronMesh.position.set(rx + 130, ry + 0.07, rz + 120);
     airfieldGroup.add(apronMesh);
 
+    const taxiway = new Mesh(GeometryBuilder.createPlane(20, RUNWAY_CONFIG.length - 120, 1, 12, false), rwyMat);
+    taxiway.position.set(rx + 65, ry + 0.07, rz); airfieldGroup.add(taxiway);
+    for (const z of [-850, 0, 850]) {
+      const connector = new Mesh(GeometryBuilder.createPlane(90, 24, 1, 1, false), rwyMat);
+      connector.position.set(rx + 35, ry + 0.07, rz + z); airfieldGroup.add(connector);
+    }
     const hangarWallMat = new Material({ color: 0xd8dde4, roughness: 0.55, metalness: 0.25 });
     const hangarRoofMat = new Material({ color: 0x264b73, roughness: 0.48, metalness: 0.35 });
     const woodMat = new Material({ color: 0x6b472c, roughness: 0.78, metalness: 0.02 });
     const chaletRoofMat = new Material({ color: 0x7a2f24, roughness: 0.68, metalness: 0.08 });
 
     // Hangar chính
-    const hangarBody = new Mesh(GeometryBuilder.createBox(24, 7.5, 30, 0, 3.75, 0), hangarWallMat);
-    hangarBody.position.set(rx + 62, ry, rz + 110);
+    const hangarBody = new Mesh(GeometryBuilder.createBox(42, 11, 52, 0, 5.5, 0), hangarWallMat);
+    hangarBody.position.set(rx + 210, ry, rz + 110);
     hangarBody.castShadow = true;
     airfieldGroup.add(hangarBody);
 
-    const hangarRoof = new Mesh(GeometryBuilder.createCylinder(13.5, 13.5, 31, 16, 'z'), hangarRoofMat);
+    const hangarRoof = new Mesh(GeometryBuilder.createCylinder(22.5, 22.5, 53, 16, 'z'), hangarRoofMat);
     hangarRoof.scale.set(1, 0.35, 1);
-    hangarRoof.position.set(rx + 62, ry + 7.5, rz + 110);
+    hangarRoof.position.set(rx + 210, ry + 11, rz + 110);
     hangarRoof.castShadow = true;
     airfieldGroup.add(hangarRoof);
 
     // Tháp quan sát sân bay (Control Tower)
     const towerBase = new Mesh(GeometryBuilder.createBox(6.5, 12.0, 6.5, 0, 6.0, 0), hangarWallMat);
-    towerBase.position.set(rx + 56, ry, rz + 62);
+    towerBase.position.set(rx + 105, ry, rz + 62);
     towerBase.castShadow = true;
     airfieldGroup.add(towerBase);
 
@@ -298,22 +324,22 @@ export class WildernessEnvironment {
       GeometryBuilder.createCylinder(4.6, 3.8, 3.4, 8, 'y'),
       new Material({ color: 0x8cc2e8, roughness: 0.15, metalness: 0.4, clearcoat: 0.8 })
     );
-    towerCab.position.set(rx + 56, ry + 13.7, rz + 62);
+    towerCab.position.set(rx + 105, ry + 13.7, rz + 62);
     airfieldGroup.add(towerCab);
 
     const towerRoof = new Mesh(GeometryBuilder.createCylinder(0.2, 5.2, 1.8, 8, 'y'), hangarRoofMat);
-    towerRoof.position.set(rx + 56, ry + 16.2, rz + 62);
+    towerRoof.position.set(rx + 105, ry + 16.2, rz + 62);
     airfieldGroup.add(towerRoof);
 
     // Cột gió (Windsock) bên cạnh đường băng
     const pole = new Mesh(GeometryBuilder.createCylinder(0.08, 0.12, 6.5, 8, 'y'), stripeMat);
-    pole.position.set(rx - 28, ry + 3.25, rz - 220);
+    pole.position.set(rx - 42, ry + 3.25, rz - 220);
     airfieldGroup.add(pole);
 
     const sockGeo = GeometryBuilder.createCylinder(0.22, 0.55, 2.4, 12, 'z');
     const sockMat = new Material({ color: 0xff5a1f, roughness: 0.65, emissive: 0x331000 });
     this.windsockCone = new Mesh(sockGeo, sockMat);
-    this.windsockCone.position.set(rx - 28, ry + 6.2, rz - 220);
+    this.windsockCone.position.set(rx - 42, ry + 6.2, rz - 220);
     airfieldGroup.add(this.windsockCone);
 
     // 4. Các ngôi nhà gỗ vùng Alps (Alpine Chalets) & Cầu tàu gỗ ven hồ tạo cảm giác tỷ lệ có người sinh sống
@@ -357,7 +383,7 @@ export class WildernessEnvironment {
    * Dựng hoặc cập nhật lưới địa hình, rừng thông InstancedMesh, đá và mây theo mức chất lượng đồ họa
    */
   rebuildScalableAssets(quality: QualityConfig): void {
-    // 1. Lưới địa hình (Terrain Mesh 60 × 60 km với mật độ cao hơn ở vùng thung lũng trung tâm)
+    // 1. Lưới địa hình (Terrain Mesh 120 × 120 km với mật độ cao hơn ở vùng thung lũng trung tâm)
     if (this.terrainMesh) {
       this.releaseMesh(this.terrainMesh);
       this.root.remove(this.terrainMesh);
@@ -368,7 +394,7 @@ export class WildernessEnvironment {
     const uvs = new Float32Array(vCount * 2);
     const indices = vCount > 65535 ? new Uint32Array(segs * segs * 6) : new Uint16Array(segs * segs * 6);
 
-    // Ánh xạ phi tuyến nhẹ từ [-1, 1] ra [-10000, 10000] để vùng trung tâm (hồ & đường băng) có độ phân giải lưới rất mịn
+    // Ánh xạ phi tuyến nhẹ từ [-1, 1] ra [-60000, 60000] để vùng trung tâm (hồ & đường băng) có độ phân giải lưới rất mịn
     const mapCoord = (t: number): number => {
       const s = Math.sign(t);
       const a = Math.abs(t);
@@ -384,7 +410,7 @@ export class WildernessEnvironment {
       for (let ix = 0; ix <= segs; ix++) {
         const tx = (ix / segs) * 2.0 - 1.0;
         const wx = mapCoord(tx);
-        const wy = getTerrainHeight(wx, wz);
+        const wy = getMainlandHeight(wx, wz);
         surfaceCoordinates[ix] = wx;
         surfaceHeights[iz * (segs + 1) + ix] = wy;
         positions[pIdx] = wx;
@@ -413,6 +439,7 @@ export class WildernessEnvironment {
     const terrainGeo = new BufferGeometry({ positions, normals, uvs, indices });
     const terrainMat = new Material({ shaderType: 'terrain' });
     this.terrainMesh = new Mesh(terrainGeo, terrainMat);
+    this.terrainMesh.name = 'Mainland';
     this.terrainMesh.receiveShadow = true;
     this.root.add(this.terrainMesh);
 
@@ -430,7 +457,7 @@ export class WildernessEnvironment {
     ]);
     const trunkVertices = trunk.vertexCount;
     pineGeo.colors!.set(crown.colors!, trunkVertices * 3);
-    const pineMat = new Material({ shaderType: 'pbr', color: 0xffffff, roughness: 0.85, metalness: 0.02 });
+    const pineMat = new Material({ shaderType: 'pbr', color: 0xffffff, roughness: 0.97, metalness: 0.0, doubleSided: true, foliage: true });
     this.treeInstancedMesh = new InstancedMesh(pineGeo, pineMat, quality.treeCount);
     this.treeInstancedMesh.castShadow = false;
     this.treeInstancedMesh.receiveShadow = true;
@@ -463,8 +490,8 @@ export class WildernessEnvironment {
       if (Math.abs(tx - RUNWAY_CONFIG.centerX) < 95 && Math.abs(tz - RUNWAY_CONFIG.centerZ) < 3400) continue;
 
       const ty = getSurfaceHeight(tx, tz);
-      // Không mọc dưới nước (< 3.5m) hoặc trên vùng tuyết cao (> 460m)
-      if (ty < 3.5 || ty > 460.0) continue;
+      // Không mọc dưới nước (< 3.5m) hoặc cao hơn giới hạn cây (1.000 m)
+      if (ty < 3.5 || ty > 1000.0) continue;
 
       getTerrainNormal(tx, tz, normVec);
       // Không mọc ở vách đá dựng đứng
@@ -489,13 +516,9 @@ export class WildernessEnvironment {
     }
     this.treeMatrices = this.treeInstancedMesh.instanceMatrices.slice(0, placedTrees * 16);
     this.treeColors = this.treeInstancedMesh.instanceColors.slice(0, placedTrees * 3);
-    const farCrown = spruceCrown(5, 8);
-    const farGeo = GeometryBuilder.mergeWithColors([
-      { geo: trunk, color: new Color(0x4a3525), offset: new Vector3(0, 4.5, 0) },
-      { geo: farCrown, color: new Color(0x234b26) }
-    ]);
-    farGeo.colors!.set(farCrown.colors!, trunk.vertexCount * 3);
-    this.farTreeMesh = new InstancedMesh(farGeo, pineMat, quality.treeCount);
+    const farGeo = GeometryBuilder.createPlane(15.6 * 0.5, 15.6, 1, 1, true);
+    for (let i = 1; i < farGeo.positions.length; i += 3) farGeo.positions[i] += 7;
+    this.farTreeMesh = new InstancedMesh(farGeo, new Material({ treeBillboard: true, doubleSided: true, roughness: 1 }), quality.treeCount);
     this.farTreeMesh.count = 0;
     this.root.add(this.farTreeMesh);
     this.lastTreeFocus.set(Infinity, Infinity, Infinity);
@@ -551,6 +574,7 @@ export class WildernessEnvironment {
   cloudCoverage = 0.38;
 
   update(time: number, windDirRad: number, windSpeedMs: number, focus?: Vector3): void {
+    if (focus && this.nearWaterMesh) this.nearWaterMesh.position.set(Math.round(focus.x / 500) * 500, 0, Math.round(focus.z / 500) * 500);
     if (focus && this.treeInstancedMesh && this.farTreeMesh && focus.clone().sub(this.lastTreeFocus).lengthSq() > 3600) {
       this.lastTreeFocus.copy(focus);
       let near = 0, far = 0;
@@ -559,7 +583,7 @@ export class WildernessEnvironment {
         const dz = this.treeMatrices[i * 16 + 14] - focus.z;
         const distanceSquared = dx * dx + dz * dz;
         if (distanceSquared > 6000 * 6000) continue;
-        const detailed = distanceSquared < 1200 * 1200;
+        const detailed = distanceSquared < 650 * 650;
         const mesh = detailed ? this.treeInstancedMesh : this.farTreeMesh;
         const index = detailed ? near++ : far++;
         mesh.instanceMatrices.set(this.treeMatrices.subarray(i * 16, i * 16 + 16), index * 16);

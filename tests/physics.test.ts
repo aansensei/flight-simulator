@@ -1,11 +1,17 @@
+import { readFileSync } from 'node:fs';
+import { setAlpineElevationData } from '../src/elevation-data';
+import { AIRCRAFT_PROFILES, AircraftId } from '../src/aircraft-specs';
+import { getIslandHeight, islands } from '../src/archipelago';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { airDensity, angularAcceleration, liftCoefficient, propellerThrust } from '../src/flight-math';
 import { FlightPhysicsEngine } from '../src/physics';
 import { ScenicPilot } from '../src/scenic-pilot';
-import { Mesh, Scene, Vector3 } from '../src/webgl2-three';
+import { Euler, Mesh, Scene, Vector3 } from '../src/webgl2-three';
 import { ControlInputs, QUALITY_PRESETS, UserSettings } from '../src/types';
 import { getSurfaceHeight, getTerrainHeight, RUNWAY_CONFIG, WildernessEnvironment } from '../src/terrain';
+
+setAlpineElevationData(readFileSync(new URL('../public/assets/terrain/alps.dem', import.meta.url)).buffer as ArrayBuffer);
 
 const idle: ControlInputs = { pitchUp: false, pitchDown: false, rollLeft: false, rollRight: false, yawLeft: false, yawRight: false, throttleUp: false, throttleDown: false, brakes: false, trimUp: false, trimDown: false };
 const settings: UserSettings = { flightMode: 'assisted', quality: 'high', timeOfDay: 'morning', invertPitch: false, controlSensitivity: 1, fov: 60, cockpitVibration: false, soundEnabled: false, showHud: true, showHelp: false, showPerf: false };
@@ -119,8 +125,8 @@ test('rotate, climb and complete a flared landing using control surfaces', () =>
   const landing = new FlightPhysicsEngine();
   landing.reset('approach');
   for (let i = 0; i < 130 * 120 && !landing.telemetry.crashed; i++) {
-    if (landing.position.z < 760) landing.throttle = 0;
-    const flare = landing.position.y < 22 && landing.position.z < 750;
+    if (landing.position.z < RUNWAY_CONFIG.length / 2 + 200) landing.throttle = 0;
+    const flare = landing.position.y < 22 && landing.position.z < RUNWAY_CONFIG.length / 2 + 190;
     landing.update(1 / 120, { ...idle, pitchAxis: flare ? 0.25 : 0, brakes: landing.telemetry.onGround }, settings, 0);
   }
   assert.equal(landing.telemetry.crashed, false, landing.telemetry.crashReason);
@@ -133,16 +139,16 @@ test('rotate, climb and complete a flared landing using control surfaces', () =>
 test('visible terrain and contacts agree at Low and Ultra detail', () => {
   for (const quality of [QUALITY_PRESETS.low, QUALITY_PRESETS.ultra]) {
     const environment = new WildernessEnvironment(new Scene(), { ...quality, treeCount: 0, rockCount: 0, cloudClusters: 0 });
-    const terrain = environment.root.children.find(child => child instanceof Mesh && child.material.shaderType === 'terrain') as Mesh;
+    const terrain = environment.root.children.find(child => child.name === 'Mainland') as Mesh;
     const positions = terrain.geometry.positions;
     for (let i = 0; i < positions.length; i += 501) {
-      assert.ok(Math.abs(getSurfaceHeight(positions[i], positions[i + 2]) - positions[i + 1]) < 0.001);
+      assert.ok(Math.abs(getSurfaceHeight(positions[i], positions[i + 2]) - Math.max(positions[i + 1], getIslandHeight(positions[i], positions[i + 2]))) < 0.001);
     }
     const landing = new FlightPhysicsEngine();
     landing.reset('approach');
     for (let i = 0; i < 130 * 120 && !landing.telemetry.crashed; i++) {
-      if (landing.position.z < 760) landing.throttle = 0;
-      const flare = landing.position.y < 22 && landing.position.z < 750;
+      if (landing.position.z < RUNWAY_CONFIG.length / 2 + 200) landing.throttle = 0;
+      const flare = landing.position.y < 22 && landing.position.z < RUNWAY_CONFIG.length / 2 + 190;
       landing.update(1 / 120, { ...idle, pitchAxis: flare ? 0.25 : 0, brakes: landing.telemetry.onGround }, settings, 0);
     }
     assert.equal(landing.telemetry.crashed, false, landing.telemetry.crashReason);
@@ -163,4 +169,73 @@ test('scenic pilot completes five minutes without terrain impact or stall', () =
   assert.ok(minimumClearance > 40, `clearance ${minimumClearance}`);
   assert.ok(engine.telemetry.iasKnots > 55 && engine.telemetry.iasKnots < 130);
   assert.ok(engine.angularVel.length() < 1);
+});
+
+test('all aircraft sustain an assisted climb with bounded propulsive power', () => {
+  const climbRates: number[] = [];
+  for (const id of Object.keys(AIRCRAFT_PROFILES) as AircraftId[]) {
+    const engine = new FlightPhysicsEngine(id);
+    engine.position.set(30000, 650, 10000);
+    engine.throttle = 1;
+    let peakPowerRatio = 0;
+    for (let i = 0; i < 120 * 120; i++) {
+      engine.update(1 / 120, { ...idle, pitchUp: true }, settings, 0);
+      peakPowerRatio = Math.max(peakPowerRatio, engine.forces.thrustN * engine.velocity.length() / engine.forces.shaftPowerW);
+    }
+    assert.equal(engine.telemetry.crashed, false);
+    assert.equal(engine.telemetry.isStalling, false);
+    assert.ok(engine.position.y > 1000);
+    assert.ok(engine.telemetry.iasKnots >= engine.profile.bestClimbKnots - 8);
+    assert.ok(peakPowerRatio <= 1, `${id}: useful power ${peakPowerRatio}`);
+    climbRates.push(engine.telemetry.verticalSpeedFpm);
+  }
+  assert.ok(climbRates[1] > climbRates[0] && climbRates[2] > climbRates[1]);
+});
+
+test('bay spawn clears karst islands and their visible summit vertices match contact heights', () => {
+  const engine = new FlightPhysicsEngine();
+  engine.reset('archipelago');
+  assert.ok(engine.position.y - getSurfaceHeight(engine.position.x, engine.position.z) > 200);
+  assert.ok(islands.length > 50);
+  for (const island of islands) {
+    const terrain = getSurfaceHeight(island.x, island.z);
+    assert.ok(terrain > 50 && terrain <= 400);
+    assert.ok(Math.abs(terrain - getIslandHeight(island.x, island.z)) < 0.01);
+  }
+});
+
+test('all aircraft depart the enlarged airport and complete the bay sightseeing route', () => {
+  for (const id of Object.keys(AIRCRAFT_PROFILES) as AircraftId[]) {
+    const departure = new FlightPhysicsEngine(id);
+    departure.reset('runway'); departure.throttle = 1;
+    simulate(departure, 18);
+    simulate(departure, 10, 60, { ...idle, pitchUp: true });
+    assert.equal(departure.telemetry.crashed, false, `${id}: ${departure.telemetry.crashReason}`);
+    assert.equal(departure.telemetry.onGround, false);
+    assert.ok(departure.position.y > RUNWAY_CONFIG.elevation + 20);
+
+    const engine = new FlightPhysicsEngine(id);
+    engine.reset('archipelago');
+    const pilot = new ScenicPilot(); pilot.reset(true);
+    let minimumClearance = Infinity;
+    for (let i = 0; i < 300 * 60 && !engine.telemetry.crashed; i++) {
+      engine.update(1 / 60, pilot.controls(engine), settings, 0);
+      minimumClearance = Math.min(minimumClearance, engine.position.y - getSurfaceHeight(engine.position.x, engine.position.z));
+    }
+    assert.equal(engine.telemetry.crashed, false, `${id}: ${engine.telemetry.crashReason}`);
+    assert.equal(engine.telemetry.isStalling, false, id);
+    assert.ok(minimumClearance > 80, `${id}: clearance ${minimumClearance}`);
+  }
+});
+
+test('wide twin wingtip contacts use its actual span while narrow wings remain clear', () => {
+  for (const id of ['skyhawk', 'coastal'] as AircraftId[]) {
+    const engine = new FlightPhysicsEngine(id);
+    engine.position.set(RUNWAY_CONFIG.centerX, RUNWAY_CONFIG.elevation + 2.7, 0);
+    engine.quaternion.setFromEuler(new Euler(0, 0, Math.PI / 6));
+    engine.velocity.set(0, 0, 0); engine.throttle = 0;
+    engine.update(1 / 120, idle, settings, 0);
+    assert.equal(engine.telemetry.crashed, id === 'coastal');
+    if (id === 'coastal') assert.match(engine.telemetry.crashReason, /mút cánh/);
+  }
 });

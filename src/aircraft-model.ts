@@ -1,3 +1,4 @@
+import { AIRCRAFT_PROFILES, AircraftId } from './aircraft-specs';
 /**
  * AERONAUT: Wilderness Flight
  * Module: src/aircraft-model.ts
@@ -53,7 +54,9 @@ export class Cessna172Model {
   private panelMaterial: Material;
   private lastPanelRedrawTime = -1;
 
-  constructor() {
+  private propellers: Array<{ solid: Group; blur: Mesh }> = [];
+
+  constructor(private aircraftId: AircraftId = 'skyhawk') {
     this.root.name = 'Cessna172_Root';
     this.root.add(this.exteriorGroup);
     this.root.add(this.cockpitGroup);
@@ -74,9 +77,25 @@ export class Cessna172Model {
     this.buildHighWingAndStruts();
     this.buildEmpennageAndTailSurfaces();
     this.buildTricycleLandingGear();
-    this.buildPropellerAssembly();
+    if (aircraftId === 'coastal') {
+      const podMat = new Material({ color: 0xe1e5df, roughness: 0.32, metalness: 0.18 });
+      for (const side of [-1, 1]) {
+        const pod = new Mesh(GeometryBuilder.createCylinder(0.34, 0.42, 2.5, 24, 'z'), podMat);
+        pod.position.set(side * 2.35, 0.28, -1.2); pod.castShadow = true; this.exteriorGroup.add(pod);
+        this.buildPropellerAssembly(side * 2.35, -2.5, 0.28);
+      }
+    } else this.buildPropellerAssembly();
     this.buildCockpitInterior();
     this.initDustParticles();
+    if (aircraftId === 'ranger') {
+      const tire = new Material({ color: 0x171b19, roughness: 0.95 });
+      for (const side of [-1, 1]) {
+        const wheel = new Mesh(GeometryBuilder.createCylinder(0.31, 0.31, 0.29, 24, 'x'), tire);
+        wheel.position.set(side * 1.35, -1.02, 0.05); wheel.castShadow = true; this.exteriorGroup.add(wheel);
+        const fence = new Mesh(GeometryBuilder.createBox(0.05, 0.28, 1.25), new Material({ color: 0xcc651e, roughness: 0.4 }));
+        fence.position.set(side * 6.0, 0.98, -0.1); this.exteriorGroup.add(fence);
+      }
+    }
   }
 
   /**
@@ -92,7 +111,7 @@ export class Cessna172Model {
     });
     // Điểm nhấn sơn xanh đậm (Deep Navy/Cobalt Livery)
     const navyAccentMat = new Material({
-      color: 0x123868,
+      color: this.aircraftId === 'ranger' ? 0x9e481d : this.aircraftId === 'coastal' ? 0x174b49 : 0x123868,
       roughness: 0.30,
       metalness: 0.15,
       clearcoat: 0.6
@@ -203,7 +222,7 @@ export class Cessna172Model {
       clearcoat: 0.55
     });
     const navyTipMat = new Material({
-      color: 0x123868,
+      color: this.aircraftId === 'ranger' ? 0x9e481d : this.aircraftId === 'coastal' ? 0x174b49 : 0x123868,
       roughness: 0.30,
       metalness: 0.15,
       clearcoat: 0.6
@@ -215,7 +234,7 @@ export class Cessna172Model {
     });
 
     // Cánh chính: Sải cánh 11.00 m, dây cung gốc 1.62 m, dây cung đầu mút 1.12 m, cao độ lắp cánh y = 0.72 m
-    const mainWingGeo = GeometryBuilder.createAirfoilWing(11.0, 1.62, 1.12, 0.12, 0.17, 0.14, 16, 22);
+    const mainWingGeo = GeometryBuilder.createAirfoilWing(AIRCRAFT_PROFILES[this.aircraftId].specs.wingspan, 1.62, 1.12, 0.12, 0.17, 0.14, 16, 22);
     const mainWingMesh = new Mesh(mainWingGeo, whiteWingMat);
     mainWingMesh.position.set(0, 0.72, -0.22);
     mainWingMesh.castShadow = true;
@@ -225,9 +244,9 @@ export class Cessna172Model {
     // Sơn xanh đậm ở hai đầu mút cánh (Wingtip Fairings) + Đèn hàng không (Đỏ cánh trái, Xanh lá cánh phải)
     const tipGeo = GeometryBuilder.createBox(0.45, 0.08, 1.12);
     const leftTip = new Mesh(tipGeo, navyTipMat);
-    leftTip.position.set(-5.32, 0.88, -0.14);
+    leftTip.position.set(-AIRCRAFT_PROFILES[this.aircraftId].specs.wingspan / 2 + 0.18, 0.88, -0.14);
     const rightTip = new Mesh(tipGeo, navyTipMat);
-    rightTip.position.set(5.32, 0.88, -0.14);
+    rightTip.position.set(AIRCRAFT_PROFILES[this.aircraftId].specs.wingspan / 2 - 0.18, 0.88, -0.14);
     this.exteriorGroup.add(leftTip);
     this.exteriorGroup.add(rightTip);
 
@@ -235,12 +254,12 @@ export class Cessna172Model {
       GeometryBuilder.createCylinder(0.04, 0.04, 0.12, 8, 'z'),
       new Material({ color: 0xff2222, emissive: 0xff1111 })
     );
-    navLightRed.position.set(-5.52, 0.88, -0.35);
+    navLightRed.position.set(-AIRCRAFT_PROFILES[this.aircraftId].specs.wingspan / 2 - 0.02, 0.88, -0.35);
     const navLightGreen = new Mesh(
       GeometryBuilder.createCylinder(0.04, 0.04, 0.12, 8, 'z'),
       new Material({ color: 0x22ff44, emissive: 0x11ee33 })
     );
-    navLightGreen.position.set(5.52, 0.88, -0.35);
+    navLightGreen.position.set(AIRCRAFT_PROFILES[this.aircraftId].specs.wingspan / 2 + 0.02, 0.88, -0.35);
     this.exteriorGroup.add(navLightRed);
     this.exteriorGroup.add(navLightGreen);
 
@@ -291,7 +310,7 @@ export class Cessna172Model {
    */
   private buildEmpennageAndTailSurfaces(): void {
     const whiteMat = new Material({ color: 0xf4f6f9, roughness: 0.32, metalness: 0.08, clearcoat: 0.5 });
-    const navyMat = new Material({ color: 0x123868, roughness: 0.30, metalness: 0.15, clearcoat: 0.6 });
+    const navyMat = new Material({ color: this.aircraftId === 'ranger' ? 0x9e481d : this.aircraftId === 'coastal' ? 0x174b49 : 0x123868, roughness: 0.30, metalness: 0.15, clearcoat: 0.6 });
 
     // Sống lưng đuôi (Dorsal Fin) và Đuôi đứng (Swept-back Vertical Fin đặc trưng của Cessna 172)
     const vFinGeo = GeometryBuilder.createLoftedSections([
@@ -376,12 +395,13 @@ export class Cessna172Model {
   /**
    * 5. Cánh quạt 2 lá McCauley + Chóp Spinner + Đĩa mờ (Propeller Blur Disc) khi RPM cao
    */
-  private buildPropellerAssembly(): void {
+  private buildPropellerAssembly(x = 0, z = -3.38, y = -0.08): void {
+    this.propellerSolidGroup = new Group();
     const spinnerMat = new Material({ color: 0xd8dee6, roughness: 0.20, metalness: 0.85, clearcoat: 0.7 });
     const bladeMat = new Material({ color: 0x22262b, roughness: 0.42, metalness: 0.35 });
     const tipStripeMat = new Material({ color: 0xf4f6f9, roughness: 0.35 });
 
-    this.propellerSolidGroup.position.set(0, -0.08, -3.38);
+    this.propellerSolidGroup.position.set(x, y, z);
 
     // Chóp nón Spinner
     const spinner = new Mesh(GeometryBuilder.createCylinder(0.02, 0.21, 0.38, 16, 'z'), spinnerMat);
@@ -409,8 +429,9 @@ export class Cessna172Model {
       opacity: 0.0
     });
     this.propellerBlurMesh = new Mesh(discGeo, discMat);
-    this.propellerBlurMesh.position.set(0, -0.08, -3.42);
+    this.propellerBlurMesh.position.set(x, y, z - 0.04);
     this.exteriorGroup.add(this.propellerBlurMesh);
+    this.propellers.push({ solid: this.propellerSolidGroup, blur: this.propellerBlurMesh });
   }
 
   /**
@@ -778,11 +799,13 @@ export class Cessna172Model {
 
     // 5. Cánh quạt quay theo RPM & chuyển mượt sang đĩa mờ (Propeller Blur Disc) khi RPM cao
     const rps = telemetry.rpm / 60.0;
-    this.propellerSolidGroup.rotation.z += rps * Math.PI * 2 * dt;
+    for (const propeller of this.propellers) propeller.solid.rotation.z += rps * Math.PI * 2 * dt;
     // Khi RPM > 1100, giảm dần hiển thị cánh cứng ở tốc độ cao hoặc bật đĩa mờ để không bị nhấp nháy
     const blurFactor = MathUtils.smoothstep(950, 1850, telemetry.rpm);
-    this.propellerBlurMesh.material.opacity = blurFactor * 0.52;
-    this.propellerBlurMesh.visible = blurFactor > 0.02;
+    for (const propeller of this.propellers) {
+      propeller.blur.material.opacity = blurFactor * 0.52;
+      propeller.blur.visible = blurFactor > 0.02;
+    }
 
     // 6. Cần lái (Yoke) và Cần ga (Throttle) trong buồng lái
     const yokePullZ = telemetry.elevatorNorm * 0.065;

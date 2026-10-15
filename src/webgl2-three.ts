@@ -653,6 +653,8 @@ export interface MaterialOptions {
   doubleSided?: boolean;
   emissive?: number;
   canvasTexture?: HTMLCanvasElement;
+  foliage?: boolean;
+  treeBillboard?: boolean;
 }
 
 export class Material {
@@ -666,6 +668,8 @@ export class Material {
   doubleSided: boolean;
   emissive: Color;
   canvasTexture: HTMLCanvasElement | null;
+  foliage: boolean;
+  treeBillboard: boolean;
   glTexture: WebGLTexture | null = null;
   textureNeedsUpdate = true;
 
@@ -680,6 +684,8 @@ export class Material {
     this.doubleSided = opts.doubleSided || false;
     this.emissive = new Color(opts.emissive !== undefined ? opts.emissive : 0x000000);
     this.canvasTexture = opts.canvasTexture || null;
+    this.foliage = opts.foliage || false;
+    this.treeBillboard = opts.treeBillboard || false;
   }
 }
 
@@ -1138,6 +1144,16 @@ export class WebGLRenderer {
   private reflectionHeight = 0;
   private reflectionPass = false;
   private reflectionMatrix = new Matrix4();
+  private terrainTextures: WebGLTexture[] = [];
+  private terrainMaterialsReady = false;
+  private foliageTextures: WebGLTexture[] = [];
+  private foliageReady = false;
+  private terrainHeightTexture: WebGLTexture | null = null;
+  private treeAtlas: WebGLTexture | null = null;
+  private treePrototype: Mesh | null = null;
+  private treeAtlasDirty = true;
+  private bakingTree = false;
+  private waterCenter = new Vector3();
 
   private lightViewMatrix = new Matrix4();
   private lightProjMatrix = new Matrix4();
@@ -1170,8 +1186,113 @@ export class WebGLRenderer {
     this.reflectionTexture = gl.createTexture()!;
     this.reflectionDepth = gl.createRenderbuffer()!;
     this.cameraEffects = new CameraEffects(gl);
+    this.initTerrainMaterials();
+    this.initFoliageMaterials();
     this.initShaders();
     this.initShadowMap(this.shadowMapSize);
+  }
+
+  setForestGeometry(geometry: BufferGeometry): void {
+    this.treePrototype = new Mesh(geometry, new Material({ foliage: true, doubleSided: true, roughness: 0.97, metalness: 0 }));
+    this.treeAtlasDirty = true;
+  }
+
+  invalidateForestAtlas(): void { this.treeAtlasDirty = true; }
+
+  private updateForestAtlas(): void {
+    if (!this.treePrototype || !this.foliageReady || !this.treeAtlasDirty) return;
+    const gl = this.gl, width = 256, height = 512;
+    if (!this.treeAtlas) this.treeAtlas = gl.createTexture();
+    const framebuffer = gl.createFramebuffer(), depth = gl.createRenderbuffer();
+    gl.activeTexture(gl.TEXTURE10); gl.bindTexture(gl.TEXTURE_2D, this.treeAtlas);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.treeAtlas, 0);
+    gl.bindRenderbuffer(gl.RENDERBUFFER, depth); gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, width, height);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depth);
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error('Không dựng được hình cây ở xa.');
+    gl.viewport(0, 0, width, height); gl.clearColor(0, 0, 0, 0);
+    gl.depthMask(true); gl.enable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    const camera = new PerspectiveCamera(36, 0.5, 0.1, 100);
+    camera.position.set(0, 7, 24); camera.lookAt(new Vector3(0, 7, 0));
+    this.bakingTree = true; this.drawMesh(this.treePrototype, camera); this.bakingTree = false;
+    gl.activeTexture(gl.TEXTURE10); gl.bindTexture(gl.TEXTURE_2D, this.treeAtlas); gl.generateMipmap(gl.TEXTURE_2D);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.deleteFramebuffer(framebuffer); gl.deleteRenderbuffer(depth);
+    gl.activeTexture(gl.TEXTURE0); this.treeAtlasDirty = false;
+  }
+
+  setTerrainHeightField(sampleHeight: (x: number, z: number) => number): void {
+    const gl = this.gl, size = 512;
+    const heights = new Float32Array(size * size);
+    for (let z = 0; z < size; z++) for (let x = 0; x < size; x++) {
+      heights[z * size + x] = sampleHeight((x / (size - 1) - 0.5) * 64000, (z / (size - 1) - 0.5) * 64000);
+    }
+    if (!this.terrainHeightTexture) this.terrainHeightTexture = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE9); gl.bindTexture(gl.TEXTURE_2D, this.terrainHeightTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, size, size, 0, gl.RED, gl.FLOAT, heights);
+    const filtering = gl.getExtension('OES_texture_float_linear') ? gl.LINEAR : gl.NEAREST;
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filtering);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filtering);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.activeTexture(gl.TEXTURE0);
+  }
+
+  private initFoliageMaterials(): void {
+    const gl = this.gl;
+    let loaded = 0;
+    for (const [index, filename] of ['pine-twig-color.png', 'pine-twig-alpha.png'].entries()) {
+      const texture = gl.createTexture()!; this.foliageTextures.push(texture);
+      gl.activeTexture(gl.TEXTURE7 + index); gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]));
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); gl.generateMipmap(gl.TEXTURE_2D);
+      const image = new Image();
+      image.onload = () => {
+        gl.activeTexture(gl.TEXTURE7 + index); gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image); gl.generateMipmap(gl.TEXTURE_2D);
+        gl.activeTexture(gl.TEXTURE0); this.foliageReady = ++loaded === 2;
+      };
+      image.src = new URL(`assets/foliage/${filename}`, document.baseURI).href;
+    }
+    gl.activeTexture(gl.TEXTURE0);
+  }
+
+  private initTerrainMaterials(): void {
+    const gl = this.gl;
+    const anisotropy = gl.getExtension('EXT_texture_filter_anisotropic');
+    let loaded = 0;
+    for (const [index, filename] of ['grass-color.jpg', 'rock-color.jpg', 'rock-normal.jpg'].entries()) {
+      const texture = gl.createTexture()!;
+      this.terrainTextures.push(texture);
+      gl.activeTexture(gl.TEXTURE4 + index); gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(index === 2 ? [128, 128, 255, 255] : [128, 128, 128, 255]));
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+      gl.generateMipmap(gl.TEXTURE_2D);
+      if (anisotropy) gl.texParameterf(gl.TEXTURE_2D, anisotropy.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(4, gl.getParameter(anisotropy.MAX_TEXTURE_MAX_ANISOTROPY_EXT)));
+      const image = new Image();
+      image.onload = () => {
+        gl.activeTexture(gl.TEXTURE4 + index); gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+        gl.generateMipmap(gl.TEXTURE_2D);
+        gl.activeTexture(gl.TEXTURE0);
+        this.terrainMaterialsReady = ++loaded === 3;
+      };
+      image.src = new URL(`assets/materials/${filename}`, document.baseURI).href;
+    }
+    gl.activeTexture(gl.TEXTURE0);
   }
 
   setSize(outputW: number, outputH: number, renderScale: number, maxDpr: number): void {
@@ -1250,10 +1371,11 @@ export class WebGLRenderer {
   private initShaders(): void {
     const commonUniforms = [
       'uModel', 'uView', 'uProj', 'uLightSpace',
+      'uTreeBillboard', 'uTreeAtlas', 'uBakingTree',
       'uCameraPos', 'uSunDir', 'uSunColor', 'uSkyZenith', 'uSkyHorizon', 'uGroundColor',
       'uFogColor', 'uFogDensity', 'uCloudImmersion', 'uTime',
       'uBaseColor', 'uRoughness', 'uMetalness', 'uClearcoat', 'uOpacity', 'uEmissive',
-      'uReflection', 'uReflectionMatrix', 'uClipWater', 'uCloudCover', 'uRain', 'uShadowMap', 'uTex', 'uUseVertexColor', 'uWaveLayers', 'uPostGrading'
+      'uTerrainHeightField', 'uNeedlesColor', 'uNeedlesAlpha', 'uFoliage', 'uGrassColor', 'uRockColor', 'uRockNormal', 'uTerrainMaterials', 'uWaterCenter', 'uReflection', 'uReflectionMatrix', 'uClipWater', 'uCloudCover', 'uRain', 'uShadowMap', 'uTex', 'uUseVertexColor', 'uWaveLayers', 'uPostGrading'
     ];
 
     // 1. Shadow Pass Shaders (Standard & Instanced)
@@ -1438,6 +1560,8 @@ export class WebGLRenderer {
       uniform mat4 uView;
       uniform mat4 uProj;
       uniform mat4 uLightSpace;
+      uniform vec3 uCameraPos;
+      uniform float uTreeBillboard;
 
       out vec3 vWorldPos;
       out vec3 vNormal;
@@ -1448,6 +1572,11 @@ export class WebGLRenderer {
       void main() {
         mat4 instMat = mat4(aInstRow0, aInstRow1, aInstRow2, aInstRow3);
         vec4 worldPos = instMat * vec4(aPosition, 1.0);
+        if (uTreeBillboard > 0.5) {
+          vec3 center = instMat[3].xyz;
+          vec3 right = normalize(vec3(uCameraPos.z - center.z, 0.0, center.x - uCameraPos.x));
+          worldPos.xyz = center + right * aPosition.x * length(instMat[0].xyz) + vec3(0.0, aPosition.y * length(instMat[1].xyz), 0.0);
+        }
         vWorldPos = worldPos.xyz;
         vNormal = normalize(mat3(instMat) * aNormal);
         vUv = aUv;
@@ -1472,6 +1601,12 @@ export class WebGLRenderer {
       uniform float uOpacity;
       uniform vec3 uEmissive;
       uniform float uUseVertexColor;
+      uniform float uFoliage;
+      uniform float uTreeBillboard;
+      uniform float uBakingTree;
+      uniform sampler2D uTreeAtlas;
+      uniform sampler2D uNeedlesColor;
+      uniform sampler2D uNeedlesAlpha;
 
       ${glslCommonFS}
 
@@ -1479,18 +1614,31 @@ export class WebGLRenderer {
 
       void main() {
         if (uClipWater > 0.5 && vWorldPos.y < 0.04) discard;
+        if (uTreeBillboard > 0.5) {
+          vec4 tree = texture(uTreeAtlas, vUv);
+          if (tree.a < 0.035) discard;
+          vec3 treeColor = clamp(tree.rgb / max(tree.a, 0.035), 0.0, 1.0);
+          vec3 color = applyAtmosphericFog(pow(treeColor, vec3(2.2)), vWorldPos);
+          fragColor = vec4(pow(max(color, 0.0), vec3(1.0 / 2.2)), 1.0);
+          return;
+        }
         vec3 N = normalize(vNormal);
+        bool needles = uFoliage > 0.5 && vColor.g > vColor.r * 1.15;
+        float foliageCutoff = mix(0.24, 0.035, smoothstep(120.0, 1500.0, length(vWorldPos - uCameraPos)));
+        if (needles && texture(uNeedlesAlpha, vUv).r < foliageCutoff) discard;
+        if (uFoliage > 0.5 && !gl_FrontFacing) N = -N;
         vec3 V = normalize(uCameraPos - vWorldPos);
         vec3 L = normalize(uSunDir);
         vec3 H = normalize(V + L);
 
         vec3 albedo = uBaseColor * mix(vec3(1.0), vColor, uUseVertexColor);
+        if (needles) albedo = pow(texture(uNeedlesColor, vUv).rgb, vec3(2.2)) * vColor * 2.8;
         float NdotL = max(dot(N, L), 0.0);
         float NdotV = max(dot(N, V), 0.001);
         float NdotH = max(dot(N, H), 0.0);
         float VdotH = max(dot(V, H), 0.0);
 
-        float shadow = calcShadow(vLightSpacePos, N);
+        float shadow = uBakingTree > 0.5 ? 1.0 : calcShadow(vLightSpacePos, N);
 
         // Cook-Torrance GGX approximation
         float alpha = max(0.04, uRoughness * uRoughness);
@@ -1503,7 +1651,10 @@ export class WebGLRenderer {
 
         vec3 kD = (vec3(1.0) - F) * (1.0 - uMetalness);
         vec3 diffuse = kD * albedo / 3.14159;
-        vec3 spec = (D * F) * 0.25;
+        float geometryK = (uRoughness + 1.0) * (uRoughness + 1.0) / 8.0;
+        float geometryL = NdotL / max(0.001, NdotL * (1.0 - geometryK) + geometryK);
+        float geometryV = NdotV / max(0.001, NdotV * (1.0 - geometryK) + geometryK);
+        vec3 spec = D * F * geometryL * geometryV / max(0.001, 4.0 * NdotL * NdotV);
 
         // Clearcoat cho sơn máy bay và kính buồng lái
         float ccSpec = pow(NdotH, 96.0) * uClearcoat * 0.45;
@@ -1539,7 +1690,55 @@ export class WebGLRenderer {
 
       ${glslCommonFS}
 
+      uniform sampler2D uGrassColor;
+      uniform sampler2D uRockColor;
+      uniform sampler2D uRockNormal;
+      uniform float uTerrainMaterials;
+      uniform sampler2D uTerrainHeightField;
       out vec4 fragColor;
+
+      float terrainHeight(vec2 p) { return texture(uTerrainHeightField, p / 64000.0 + 0.5).r; }
+      float terrainSunShadow(vec3 point) {
+        vec2 direction = normalize(uSunDir.xz);
+        float slope = uSunDir.y / max(0.04, length(uSunDir.xz));
+        float visibility = 1.0;
+        for (int i = 0; i < 11; i++) {
+          float distanceSun = 90.0 * pow(1.6, float(i));
+          vec2 position = point.xz + direction * distanceSun;
+          if (max(abs(position.x), abs(position.y)) > 31900.0) break;
+          float clearance = point.y + slope * distanceSun - terrainHeight(position);
+          visibility = min(visibility, smoothstep(-25.0, 35.0 + distanceSun * 0.008, clearance + 35.0));
+        }
+        return mix(0.25, 1.0, visibility);
+      }
+      float terrainAmbient(vec3 p) {
+        float horizon = 0.0;
+        for (int i = 0; i < 4; i++) {
+          float angle = float(i) * 1.570796;
+          vec2 d = vec2(cos(angle), sin(angle)) * 220.0;
+          horizon += max(0.0, terrainHeight(p.xz + d) - p.y - 25.0);
+        }
+        return clamp(exp(-horizon * 0.0015), 0.45, 1.0);
+      }
+      vec3 untiled(sampler2D imageMap, vec2 uv) {
+        vec2 dx = dFdx(uv), dy = dFdy(uv);
+        float variation = texture(uGrassColor, uv * 0.006).g * 8.0;
+        float tile = floor(variation), blend = fract(variation);
+        vec2 a = sin(vec2(3.0, 7.0) * tile) * 3.0;
+        vec2 b = sin(vec2(3.0, 7.0) * (tile + 1.0)) * 3.0;
+        vec3 ca = textureGrad(imageMap, uv + a, dx, dy).rgb;
+        vec3 cb = textureGrad(imageMap, uv + b, dx, dy).rgb;
+        return mix(ca, cb, smoothstep(0.2, 0.8, blend));
+      }
+      vec3 rockColor(vec3 p, vec3 weights) {
+        return untiled(uRockColor, p.yz) * weights.x + untiled(uRockColor, p.xz) * weights.y + untiled(uRockColor, p.xy) * weights.z;
+      }
+      vec3 rockNormal(vec3 p, vec3 weights, vec3 normal) {
+        vec3 x = texture(uRockNormal, p.yz).xyz * 2.0 - 1.0;
+        vec3 y = texture(uRockNormal, p.xz).xyz * 2.0 - 1.0;
+        vec3 z = texture(uRockNormal, p.xy).xyz * 2.0 - 1.0;
+        return normalize(vec3(x.z * sign(normal.x), x.x, x.y) * weights.x + vec3(y.x, y.z * sign(normal.y), y.y) * weights.y + vec3(z.x, z.y, z.z * sign(normal.z)) * weights.z);
+      }
 
       float hash21(vec2 p) {
         p = fract(p * vec2(123.34, 456.21));
@@ -1581,7 +1780,7 @@ export class WebGLRenderer {
         float nMicro = vnoise(vWorldPos.xz * 0.14);
 
         // Bảng màu địa chất vùng Alps tự nhiên, không quá bão hòa
-        vec3 sandGravel = mix(vec3(0.46, 0.43, 0.37), vec3(0.36, 0.34, 0.29), nMeso);
+        vec3 sandGravel = mix(vec3(0.13, 0.12, 0.10), vec3(0.25, 0.23, 0.19), nMeso);
         vec3 lushMeadow = mix(vec3(0.19, 0.33, 0.14), vec3(0.26, 0.39, 0.17), nMacro * 0.7 + nMeso * 0.3);
         vec3 alpineForest = mix(vec3(0.11, 0.22, 0.11), vec3(0.16, 0.27, 0.14), nMeso);
         vec3 graniteRock = mix(vec3(0.28, 0.29, 0.31), vec3(0.43, 0.44, 0.46), fbm(vWorldPos.xz * 0.035 + vec2(h * 0.04)));
@@ -1590,7 +1789,7 @@ export class WebGLRenderer {
         // Chuyển tiếp theo độ cao
         vec3 col = lushMeadow;
         // Sỏi/cát quanh bờ hồ (mực nước hồ y = 0.0) và lòng sông
-        float shoreBlend = 1.0 - smoothstep(-2.0, 9.5 + nMeso * 4.0, h);
+        float shoreBlend = 1.0 - smoothstep(-0.4, 2.2 + nMeso * 1.8, h);
         col = mix(col, sandGravel, shoreBlend);
 
         // Sườn rừng thông ở cao độ trung bình (50m -> 480m)
@@ -1598,7 +1797,8 @@ export class WebGLRenderer {
         col = mix(col, alpineForest, forestBlend * 0.72);
 
         // Tuyết trên đỉnh núi cao (từ 560m trở lên, phụ thuộc độ dốc)
-        float snowHeight = 540.0 + nMacro * 140.0;
+        float coastal = smoothstep(6200.0, 9000.0, vWorldPos.x);
+        float snowHeight = mix(1450.0, 2600.0, coastal) + nMacro * 280.0;
         float snowBlend = smoothstep(snowHeight, snowHeight + 170.0, h) * (1.0 - smoothstep(0.22, 0.56, slope));
 
         // Vách đá lộ thiên ở sườn dốc
@@ -1606,11 +1806,26 @@ export class WebGLRenderer {
         col = mix(col, graniteRock, rockMask);
         col = mix(col, alpineSnow, snowBlend);
 
+        if (uTerrainMaterials > 0.5) {
+          vec3 weights = pow(abs(N), vec3(4.0)); weights /= max(0.001, weights.x + weights.y + weights.z);
+          vec3 grass = pow(untiled(uGrassColor, vWorldPos.xz * 0.11), vec3(2.2)) * 1.45;
+          vec3 stone = pow(rockColor(vWorldPos * 0.045, weights), vec3(2.2)) * 1.4;
+          float vegetation = mix(forestBlend * 0.35, 0.18, coastal);
+          grass *= (1.0 - vegetation) * mix(vec3(0.92, 1.0, 0.82), vec3(0.55, 0.97, 0.48), coastal);
+          vec3 surface = mix(grass, stone, rockMask);
+          surface = mix(surface, sandGravel, shoreBlend * 0.75);
+          surface = mix(surface, alpineSnow, snowBlend);
+          col = mix(col, surface * (0.85 + nMacro * 0.5), 0.78);
+          vec3 detailedNormal = rockNormal(vWorldPos * 0.045, weights, N);
+          float fade = 1.0 - smoothstep(500.0, 4500.0, length(vWorldPos - uCameraPos));
+          N = normalize(mix(N, detailedNormal, rockMask * fade * 0.45));
+        }
+
         // Kiểm tra khu vực sân bay và đường băng (Runway tại x = 850, z = [-650..650], y = 18m)
         float rx = abs(vWorldPos.x - 850.0);
         float rz = abs(vWorldPos.z - 0.0);
-        if (rx < 65.0 && rz < 720.0) {
-          float padMask = (1.0 - smoothstep(28.0, 62.0, rx)) * (1.0 - smoothstep(660.0, 715.0, rz));
+        if (rx < 65.0 && rz < 1240.0) {
+          float padMask = (1.0 - smoothstep(34.0, 64.0, rx)) * (1.0 - smoothstep(1150.0, 1230.0, rz));
           col = mix(col, sandGravel * 0.88, padMask * 0.75);
         }
 
@@ -1619,22 +1834,22 @@ export class WebGLRenderer {
         float detailFade = 1.0 - smoothstep(350.0, 1800.0, length(vWorldPos - uCameraPos));
         N = normalize(N + vec3(-bump.x, 0, -bump.y) * 0.45 * detailFade);
         // Chi tiết vi mô
-        col *= (0.90 + 0.20 * nMicro);
+        col *= (0.98 + 0.04 * nMicro);
 
         // Chiếu sáng mặt trời + bóng đổ + ánh sáng bầu trời
         vec3 L = normalize(uSunDir);
         vec3 V = normalize(uCameraPos - vWorldPos);
         float NdotL = max(dot(N, L), 0.0);
-        float shadow = calcShadow(vLightSpacePos, N);
+        float shadow = min(calcShadow(vLightSpacePos, N), terrainSunShadow(vWorldPos));
 
         float hemi = N.y * 0.5 + 0.5;
-        vec3 ambient = mix(uGroundColor * 0.65, mix(uSkyHorizon, uSkyZenith, 0.4), hemi) * 0.52;
+        vec3 ambient = mix(uGroundColor * 0.65, mix(uSkyHorizon, uSkyZenith, 0.4), hemi) * 0.38;
 
         // Tuyết có độ bóng nhẹ dưới nắng
         vec3 H = normalize(L + V);
         float snowSpec = snowBlend * pow(max(dot(N, H), 0.0), 32.0) * 0.28;
 
-        vec3 finalColor = col * (ambient + uSunColor * NdotL * shadow * 1.95) + uSunColor * snowSpec * shadow;
+        vec3 finalColor = col * (ambient * terrainAmbient(vWorldPos) + uSunColor * NdotL * shadow * 1.95) + uSunColor * snowSpec * shadow;
         finalColor = applyAtmosphericFog(finalColor, vWorldPos);
         finalColor = acesToneMapping(finalColor);
         fragColor = vec4(finalColor, 1.0);
@@ -1643,24 +1858,35 @@ export class WebGLRenderer {
     this.programs['terrain'] = this.compileShader(pbrVS, terrainFS, commonUniforms);
 
     // 4. Alpine Lake Water Shader (Chuyển động sóng, Normal biến thiên theo thời gian, Fresnel, nông/sâu, vệt nắng)
+    const waterWaves = `
+      void swell(vec2 p, float time, float sea, out float height, out vec2 gradient) {
+        height = 0.0; gradient = vec2(0.0);
+        for (int i = 0; i < 3; i++) {
+          float f = float(i), k = 6.2831853 / (170.0 + f * 137.0);
+          vec2 direction = vec2(cos(0.6 + f * 1.1), sin(0.6 + f * 1.1));
+          float amplitude = (0.16 + sea * 0.62) * pow(0.65, f);
+          float phase = dot(p, direction) * k - time * sqrt(9.80665 * k) + f * 2.7;
+          height += amplitude * sin(phase);
+          gradient += direction * amplitude * k * cos(phase);
+        }
+      }
+    `;
     const waterVS = `#version 300 es
+      precision highp float;
       layout(location = 0) in vec3 aPosition;
-      layout(location = 1) in vec3 aNormal;
-      layout(location = 2) in vec2 aUv;
-
       uniform mat4 uModel;
       uniform mat4 uView;
       uniform mat4 uProj;
       uniform float uTime;
-
+      uniform float uRoughness;
       out vec3 vWorldPos;
-      out vec2 vUv;
-
+      ${waterWaves}
       void main() {
         vec4 worldPos = uModel * vec4(aPosition, 1.0);
-        worldPos.y += sin(worldPos.x * 0.008 + worldPos.z * 0.006 + uTime) * 0.025;
+        float height; vec2 gradient;
+        swell(worldPos.xz, uTime, smoothstep(6200.0, 9000.0, worldPos.x), height, gradient);
+        if (uRoughness < 0.9) worldPos.y += height;
         vWorldPos = worldPos.xyz;
-        vUv = aUv;
         gl_Position = uProj * uView * worldPos;
       }
     `;
@@ -1668,24 +1894,29 @@ export class WebGLRenderer {
     const waterFS = `#version 300 es
       precision highp float;
       in vec3 vWorldPos;
-      in vec2 vUv;
       uniform sampler2D uReflection;
       uniform mat4 uReflectionMatrix;
-      uniform float uWaveLayers;
+      uniform vec2 uWaterCenter;
+      uniform float uRoughness;
       ${glslCommonFS}
+      ${waterWaves}
       out vec4 fragColor;
       void main() {
         vec2 p = vWorldPos.xz;
-        vec2 gradient = vec2(0);
+        vec2 patchDistance = abs(p - uWaterCenter);
+        if (uRoughness > 0.9 && max(patchDistance.x, patchDistance.y) < 4000.0) discard;
+        float sea = smoothstep(6200.0, 9000.0, p.x);
+        float height; vec2 gradient;
+        swell(p, uTime, sea, height, gradient);
         float footprint = length(fwidth(p));
-        for (int i = 0; i < 10; i++) {
-          float fi = float(i);
-          float angle = fi * 2.399963;
+        for (int i = 0; i < 9; i++) {
+          float fi = float(i), angle = 0.6 + fi * 2.399963;
           vec2 direction = vec2(cos(angle), sin(angle));
-          float frequency = 0.07 * pow(1.42, fi);
-          float amplitude = (0.004 + uRain * 0.009) * pow(0.83, fi);
-          float phase = dot(p, direction) * frequency + uTime * sqrt(9.80665 * frequency) + fi * 3.73;
-          gradient += direction * cos(phase) * amplitude * (1.0 - smoothstep(1.0, 3.0, frequency * footprint));
+          float frequency = 1.2 * pow(1.57, fi);
+          float amplitude = (0.022 + sea * 0.018 + uRain * 0.032) * pow(0.8, fi);
+          float phase = dot(p, direction) * frequency - uTime * sqrt(9.80665 * frequency) + fi * 3.73;
+          phase += 1.7 * sin(dot(p, vec2(0.023, 0.017)) + fi * 1.71) + 0.8 * cos(dot(p, vec2(0.011, -0.031)) + fi * 2.9);
+          gradient += direction * cos(phase) * amplitude * (1.0 - smoothstep(0.65, 2.4, frequency * footprint));
         }
         vec3 N = normalize(vec3(-gradient.x, 1, -gradient.y));
         vec3 V = normalize(uCameraPos - vWorldPos);
@@ -1693,18 +1924,18 @@ export class WebGLRenderer {
         float fresnel = 0.02037 + 0.97963 * pow(1.0 - nv, 5.0);
         vec4 reflectionPoint = uReflectionMatrix * vec4(vWorldPos, 1);
         vec2 reflectionUv = reflectionPoint.xy / reflectionPoint.w * 0.5 + 0.5;
-        reflectionUv += gradient * 0.32;
-        vec3 reflected = texture(uReflection, clamp(reflectionUv, 0.001, 0.999)).rgb;
-        reflected = pow(reflected, vec3(2.2));
+        reflectionUv += gradient * 0.065;
+        vec3 reflected = pow(texture(uReflection, clamp(reflectionUv, 0.001, 0.999)).rgb, vec3(2.2));
         float radial = length((p - vec2(-220, 150)) * vec2(1.0 / 1080.0, 1.0 / 1850.0));
         float shallow = smoothstep(0.65, 1.05, radial);
-        vec3 transmitted = mix(vec3(0.012, 0.065, 0.073), vec3(0.025, 0.19, 0.15), shallow);
+        vec3 transmitted = mix(vec3(0.010, 0.050, 0.060), vec3(0.025, 0.14, 0.115), shallow);
+        transmitted = mix(transmitted, vec3(0.014, 0.105, 0.095), sea);
         vec3 L = normalize(uSunDir), H = normalize(L + V);
         float nh = max(0.0, dot(N, H));
-        float roughness = 0.045 + uRain * 0.075;
+        float roughness = 0.04 + uRain * 0.07 + min(0.1, footprint * 0.004);
         float a2 = roughness * roughness;
         float d = a2 / (3.14159 * pow(nh * nh * (a2 - 1.0) + 1.0, 2.0));
-        vec3 glint = uSunColor * min(2.5, d * 0.008) * max(0.0, L.y);
+        vec3 glint = uSunColor * min(3.0, d * 0.009) * max(0.0, L.y);
         vec3 body = applyAtmosphericFog(transmitted + glint, vWorldPos);
         vec3 bodyLinear = pow(acesToneMapping(body), vec3(2.2));
         vec3 color = mix(bodyLinear, reflected, fresnel);
@@ -1906,6 +2137,8 @@ export class WebGLRenderer {
   }
 
   render(scene: Scene, camera: PerspectiveCamera, shadowFocusTarget: Vector3): void {
+    this.waterCenter.copy(shadowFocusTarget);
+    this.updateForestAtlas();
     const gl = this.gl;
     this.gpuTimer.begin();
     scene.updateMatrixWorld();
@@ -2065,6 +2298,8 @@ export class WebGLRenderer {
   private drawMesh(m: Mesh, camera: PerspectiveCamera): void {
     const gl = this.gl;
     const mat = m.material;
+    if (mat.foliage && !this.foliageReady) return;
+    if (mat.treeBillboard && !this.treeAtlas) return;
     const isInst = m instanceof InstancedMesh;
     this.ensureGeometryVAO(m.geometry, isInst ? (m as InstancedMesh) : undefined);
 
@@ -2110,6 +2345,30 @@ export class WebGLRenderer {
       gl.activeTexture(gl.TEXTURE0);
     }
 
+    if (u['uWaterCenter']) gl.uniform2f(u['uWaterCenter'], Math.round(this.waterCenter.x / 500) * 500, Math.round(this.waterCenter.z / 500) * 500);
+    if (mat.shaderType === 'terrain') {
+      for (const [index, name] of ['uGrassColor', 'uRockColor', 'uRockNormal'].entries()) {
+        gl.activeTexture(gl.TEXTURE4 + index); gl.bindTexture(gl.TEXTURE_2D, this.terrainTextures[index]);
+        if (u[name]) gl.uniform1i(u[name], 4 + index);
+      }
+      gl.activeTexture(gl.TEXTURE9); gl.bindTexture(gl.TEXTURE_2D, this.terrainHeightTexture);
+      if (u['uTerrainHeightField']) gl.uniform1i(u['uTerrainHeightField'], 9);
+      if (u['uTerrainMaterials']) gl.uniform1f(u['uTerrainMaterials'], this.terrainMaterialsReady ? 1 : 0);
+      gl.activeTexture(gl.TEXTURE0);
+    }
+    if (u['uFoliage']) gl.uniform1f(u['uFoliage'], mat.foliage ? 1 : 0);
+    if (u['uBakingTree']) gl.uniform1f(u['uBakingTree'], this.bakingTree ? 1 : 0);
+    if (u['uTreeBillboard']) gl.uniform1f(u['uTreeBillboard'], mat.treeBillboard ? 1 : 0);
+    if (u['uTreeAtlas']) {
+      gl.activeTexture(gl.TEXTURE10); gl.bindTexture(gl.TEXTURE_2D, this.bakingTree ? null : this.treeAtlas); gl.uniform1i(u['uTreeAtlas'], 10);
+      gl.activeTexture(gl.TEXTURE0);
+    }
+
+    if (u['uNeedlesColor']) {
+      gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D, this.foliageTextures[0]); gl.uniform1i(u['uNeedlesColor'], 7);
+      gl.activeTexture(gl.TEXTURE8); gl.bindTexture(gl.TEXTURE_2D, this.foliageTextures[1]); gl.uniform1i(u['uNeedlesAlpha'], 8);
+      gl.activeTexture(gl.TEXTURE0);
+    }
     if (u['uBaseColor']) gl.uniform3f(u['uBaseColor'], mat.color.r, mat.color.g, mat.color.b);
     if (u['uRoughness']) gl.uniform1f(u['uRoughness'], mat.roughness);
     if (u['uMetalness']) gl.uniform1f(u['uMetalness'], mat.metalness);
@@ -2120,10 +2379,12 @@ export class WebGLRenderer {
     if (u['uShadowMap']) gl.uniform1i(u['uShadowMap'], 0);
 
     if (mat.canvasTexture && u['uTex']) {
-      this.ensureMaterialTexture(mat);
       gl.activeTexture(gl.TEXTURE1);
+      this.ensureMaterialTexture(mat);
       gl.bindTexture(gl.TEXTURE_2D, mat.glTexture);
       gl.uniform1i(u['uTex'], 1);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.activeTexture(gl.TEXTURE0);
     }
 
     gl.bindVertexArray(m.geometry.vao);

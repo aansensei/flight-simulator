@@ -1,3 +1,5 @@
+import { AIRCRAFT_PROFILES, AircraftId } from './aircraft-specs';
+import { BAY_CENTER } from './archipelago';
 /**
  * AERONAUT: Wilderness Flight
  * Module: src/physics.ts
@@ -21,7 +23,7 @@
 import { airDensity, angularAcceleration, liftCoefficient, propellerThrust } from './flight-math';
 import { Euler, MathUtils, Quaternion, Vector3 } from './webgl2-three';
 import {
-  CESSNA_172_SPECS, ControlInputs, FlightMode, SpawnLocation, TelemetryData, UserSettings
+  ControlInputs, FlightMode, SpawnLocation, TelemetryData, UserSettings
 } from './types';
 import {
   getSurfaceHeight, getTerrainNormal, isPointOnRunway, LAKE_LEVEL, RUNWAY_CONFIG, VALLEY_DATUM_FEET, WORLD_SIZE
@@ -86,12 +88,17 @@ export class FlightPhysicsEngine {
   private tmpContactForce = new Vector3();
   private tmpContactMoment = new Vector3();
   private tmpAngularAccel = new Vector3();
-  private readonly bodyInertia = new Vector3(CESSNA_172_SPECS.inertia.iyy, CESSNA_172_SPECS.inertia.izz, CESSNA_172_SPECS.inertia.ixx);
+  aircraftId: AircraftId = 'skyhawk';
+  get profile() { return AIRCRAFT_PROFILES[this.aircraftId]; }
+  get specs() { return this.profile.specs; }
+  private readonly bodyInertia = new Vector3(this.specs.inertia.iyy, this.specs.inertia.izz, this.specs.inertia.ixx);
   gustStrength = 0;
   forces = { liftN: 0, dragN: 0, thrustN: 0, shaftPowerW: 0, mechanicalEnergyJ: 0 };
   private readonly wheelOffsets = [new Vector3(0, -1.32, -1.95), new Vector3(-1.35, -1.32, 0.24), new Vector3(1.35, -1.32, 0.24)];
 
-  constructor() {
+  constructor(aircraftId: AircraftId = 'skyhawk') {
+    this.aircraftId = aircraftId;
+    this.bodyInertia.set(this.specs.inertia.iyy, this.specs.inertia.izz, this.specs.inertia.ixx);
     this.telemetry = this.createEmptyTelemetry();
     this.reset('airborne');
   }
@@ -150,9 +157,9 @@ export class FlightPhysicsEngine {
     this.telemetry.landingMessage = '';
     this.telemetry.landingTimer = 0;
 
-    if (spawn === 'airborne' || spawn === 'approach') {
+    if (spawn === 'airborne' || spawn === 'approach' || spawn === 'archipelago') {
       // Khoảnh khắc mở đầu: bay ổn định trên mặt hồ xanh trong thung lũng rộng, hướng Bắc (-Z)
-      this.position.set(-180, 215, 760);
+      this.position.set(-180, 460, 760);
       this.tmpEuler.set(MathUtils.degToRad(2.2), 0.0, 0.0, 'YXZ');
       this.quaternion.setFromEuler(this.tmpEuler);
       // Vận tốc ban đầu ~50 m/s (~97 knots), cân bằng lực nâng
@@ -164,9 +171,15 @@ export class FlightPhysicsEngine {
       this.elevatorTrim = 0.004;
       this.wasOnGround = false;
       this.touchdownChecked = true;
+      if (spawn === 'archipelago') {
+        this.position.set(BAY_CENTER.x, 650, 9600);
+        this.velocity.set(0, 0, -55);
+        this.throttle = 0.85;
+      }
       if (spawn === 'approach') {
-        this.position.set(RUNWAY_CONFIG.centerX, RUNWAY_CONFIG.elevation + 142, 3200);
-        this.velocity.set(0, -2, -34);
+        this.position.set(RUNWAY_CONFIG.centerX, RUNWAY_CONFIG.elevation + 142, RUNWAY_CONFIG.length / 2 + 2640);
+        const approachScale = Math.sqrt((this.specs.mass / this.specs.wingArea) / (1040 / 16.17));
+        this.velocity.set(0, -2 * approachScale, -34 * approachScale);
         this.tmpEuler.set(MathUtils.degToRad(2.5), 0, 0, 'YXZ');
         this.quaternion.setFromEuler(this.tmpEuler);
         this.throttle = 0.32;
@@ -176,13 +189,13 @@ export class FlightPhysicsEngine {
       }
     } else {
       // Đứng ở ngưỡng đường băng phía Nam (Runway 36, hướng Bắc -Z)
-      const rwyY = getSurfaceHeight(RUNWAY_CONFIG.centerX, RUNWAY_CONFIG.centerZ + 440);
-      this.position.set(RUNWAY_CONFIG.centerX, rwyY + 1.32, RUNWAY_CONFIG.centerZ + 440);
+      const rwyY = getSurfaceHeight(RUNWAY_CONFIG.centerX, RUNWAY_CONFIG.centerZ + RUNWAY_CONFIG.length / 2 - 120);
+      this.position.set(RUNWAY_CONFIG.centerX, rwyY + 1.32, RUNWAY_CONFIG.centerZ + RUNWAY_CONFIG.length / 2 - 120);
       this.tmpEuler.set(MathUtils.degToRad(1.2), 0.0, 0.0, 'YXZ');
       this.quaternion.setFromEuler(this.tmpEuler);
       this.velocity.set(0, 0, 0);
       this.throttle = 0.0;
-      this.rpm = CESSNA_172_SPECS.idleRpm;
+      this.rpm = this.specs.idleRpm;
       this.flapIndex = 1; // Hạ sẵn Flap 10° hỗ trợ cất cánh đường băng ngắn/tiêu chuẩn
       this.flapDeg = 10;
       this.elevatorTrim = 0.004;
@@ -202,8 +215,8 @@ export class FlightPhysicsEngine {
   }
 
   cycleFlaps(): number {
-    this.flapIndex = (this.flapIndex + 1) % CESSNA_172_SPECS.flapAnglesDeg.length;
-    return CESSNA_172_SPECS.flapAnglesDeg[this.flapIndex];
+    this.flapIndex = (this.flapIndex + 1) % this.specs.flapAnglesDeg.length;
+    return this.specs.flapAnglesDeg[this.flapIndex];
   }
 
   /**
@@ -277,7 +290,7 @@ export class FlightPhysicsEngine {
     if (inputs.trimUp) this.elevatorTrim = MathUtils.clamp(this.elevatorTrim + 0.18 * dt, -0.5, 0.5);
     if (inputs.trimDown) this.elevatorTrim = MathUtils.clamp(this.elevatorTrim - 0.18 * dt, -0.5, 0.5);
 
-    const targetFlapDeg = CESSNA_172_SPECS.flapAnglesDeg[this.flapIndex];
+    const targetFlapDeg = this.specs.flapAnglesDeg[this.flapIndex];
     const flapSpeed = 12.0; // độ/giây (motor điện hạ flap thực tế)
     if (this.flapDeg < targetFlapDeg) this.flapDeg = Math.min(targetFlapDeg, this.flapDeg + flapSpeed * dt);
     if (this.flapDeg > targetFlapDeg) this.flapDeg = Math.max(targetFlapDeg, this.flapDeg - flapSpeed * dt);
@@ -300,7 +313,12 @@ export class FlightPhysicsEngine {
     let yawTarget = rawYawCmd * sensitivity;
     if (mode === 'assisted') {
       const ground = this.wasOnGround;
-      const desiredPitch = ground ? rawPitchCmd * 0.18 : 0.045 + rawPitchCmd * 0.16 * sensitivity;
+      let desiredPitch = ground ? rawPitchCmd * 0.18 : 0.045 + rawPitchCmd * 0.16 * sensitivity;
+      if (!ground && rawPitchCmd > 0.6 && this.flapIndex === 0) {
+        // Elevator feedback trades airspeed for height while respecting available engine power.
+        const climbPitch = MathUtils.clamp(0.10 + (this.telemetry.iasKnots - this.profile.bestClimbKnots) * 0.018, -0.06, 0.38);
+        desiredPitch = MathUtils.lerp(desiredPitch, climbPitch, MathUtils.clamp((rawPitchCmd - 0.6) / 0.4, 0, 1));
+      }
       const desiredBank = -rawRollCmd * 0.48 * sensitivity;
       pitchTarget = (desiredPitch - pitchRad) * 2.5 - this.angularVel.x * 0.65;
       rollTarget = -(desiredBank - rollRad) * 1.8 + this.angularVel.z * 0.5;
@@ -357,22 +375,22 @@ export class FlightPhysicsEngine {
     const groundSurfaceY = Math.max(terrainY, LAKE_LEVEL);
     const aglMeters = this.position.y - groundSurfaceY;
     const isAirborne = aglMeters > 1.65;
-    const isStallWarning = isAirborne && iasMs > 9.0 && alpha > alphaCrit * CESSNA_172_SPECS.alphaWarnRatio;
+    const isStallWarning = isAirborne && iasMs > 9.0 && alpha > alphaCrit * this.specs.alphaWarnRatio;
 
     // 6. Hệ số Lực cản CD(α, flaps) và Lực ngang CY(β)
-    const cdInduced = (cl * cl) / (Math.PI * CESSNA_172_SPECS.aspectRatio * CESSNA_172_SPECS.oswaldEfficiency);
+    const cdInduced = (cl * cl) / (Math.PI * this.specs.aspectRatio * this.specs.oswaldEfficiency);
     const cdFlaps = flapRatio * flapRatio * 0.042;
     const cdStall = stallSeverity * stallSeverity * 0.38 + (Math.abs(alpha) > alphaCrit ? Math.pow(Math.sin(alpha), 2) * 0.65 : 0);
     const cdSideslip = 0.24 * beta * beta;
-    const cd = CESSNA_172_SPECS.cd0 + cdFlaps + cdInduced + cdStall + cdSideslip;
+    const cd = this.specs.cd0 + cdFlaps + cdInduced + cdStall + cdSideslip;
 
     const cy = -0.58 * beta + 0.14 * this.rudderDeflection;
 
     // 7. Tính Độ lớn Lực Khí động học: Áp suất động q = 0.5 * ρ * V_air²
     const qDyn = 0.5 * rho * tasMs * tasMs;
-    const liftMag = qDyn * CESSNA_172_SPECS.wingArea * cl;
-    const dragMag = qDyn * CESSNA_172_SPECS.wingArea * cd;
-    const sideMag = qDyn * CESSNA_172_SPECS.wingArea * cy;
+    const liftMag = qDyn * this.specs.wingArea * cl;
+    const dragMag = qDyn * this.specs.wingArea * cd;
+    const sideMag = qDyn * this.specs.wingArea * cy;
 
     // Hướng của Lực cản (ngược chiều dòng khí tương đối) và Lực nâng (vuông góc dòng khí và nằm trong mặt phẳng đối xứng máy bay)
     if (tasMs > 0.5) {
@@ -391,22 +409,22 @@ export class FlightPhysicsEngine {
 
     // 8. Động cơ Lycoming 180 HP & Lực đẩy cánh quạt McCauley
     const airflowRpmBonus = MathUtils.clamp(tasMs / 65.0, 0, 1) * 180 * this.throttle;
-    const targetRpm = CESSNA_172_SPECS.idleRpm +
-      Math.pow(this.throttle, 0.88) * (CESSNA_172_SPECS.maxRpm - CESSNA_172_SPECS.idleRpm - 180) +
+    const targetRpm = this.specs.idleRpm +
+      Math.pow(this.throttle, 0.88) * (this.specs.maxRpm - this.specs.idleRpm - 180) +
       airflowRpmBonus;
     this.rpm = MathUtils.lerp(this.rpm, targetRpm, Math.min(1, 6.5 * dt));
 
-    const rpmNorm = Math.max(0, (this.rpm - CESSNA_172_SPECS.idleRpm * 0.85) / (CESSNA_172_SPECS.maxRpm - CESSNA_172_SPECS.idleRpm * 0.85));
+    const rpmNorm = Math.max(0, (this.rpm - this.specs.idleRpm * 0.85) / (this.specs.maxRpm - this.specs.idleRpm * 0.85));
     const densityFactor = rho / RHO_SEA_LEVEL;
-    const shaftPower = CESSNA_172_SPECS.maxPowerWatts * this.throttle * densityFactor * MathUtils.clamp(this.rpm / CESSNA_172_SPECS.maxRpm, 0, 1);
-    const thrustMag = propellerThrust(shaftPower * 0.82, uFwd, rho, CESSNA_172_SPECS.propDiameter);
+    const shaftPower = this.specs.maxPowerWatts * this.throttle * densityFactor * MathUtils.clamp(this.rpm / this.specs.maxRpm, 0, 1);
+    const thrustMag = this.profile.engines * propellerThrust(shaftPower * 0.82 / this.profile.engines, uFwd, rho, this.specs.propDiameter);
     this.forces.liftN = liftMag;
     this.forces.dragN = dragMag;
     this.forces.thrustN = thrustMag;
     this.forces.shaftPowerW = shaftPower;
 
     // Tổng hợp Lực trong hệ tọa độ thế giới
-    this.tmpForceWorld.set(0, -CESSNA_172_SPECS.mass * GRAVITY, 0);
+    this.tmpForceWorld.set(0, -this.specs.mass * GRAVITY, 0);
     this.tmpForceWorld.addScaledVector(this.tmpForward, thrustMag);
     this.tmpForceWorld.addScaledVector(this.tmpLiftDir, liftMag);
     this.tmpForceWorld.addScaledVector(this.tmpDragDir, dragMag);
@@ -417,9 +435,9 @@ export class FlightPhysicsEngine {
     const propwashDyn = 0.5 * rho * Math.pow(rpmNorm * 22.0, 2);
     const controlQ = qDyn + propwashDyn * 0.45;
     const speed = Math.max(1, tasMs);
-    const span = CESSNA_172_SPECS.wingspan;
-    const chord = CESSNA_172_SPECS.meanChord;
-    const area = CESSNA_172_SPECS.wingArea;
+    const span = this.specs.wingspan;
+    const chord = this.specs.meanChord;
+    const area = this.specs.wingArea;
     const pitchCoefficient = -0.8 * (alpha - 0.042) + 1.1 * (1 - 0.52 * stallSeverity) * (this.elevatorDeflection + this.elevatorTrim) - 0.3 * stallSeverity;
     const rollCoefficient = -0.08 * this.aileronDeflection + 0.08 * beta;
     const yawCoefficient = -0.12 * beta + 0.1 * this.rudderDeflection - 0.008 * this.aileronDeflection;
@@ -456,7 +474,7 @@ export class FlightPhysicsEngine {
         this.tmpWheelVel.crossVectors(this.angularVel, wLocal).applyQuaternion(this.quaternion).add(this.velocity);
         getTerrainNormal(this.tmpWheelWorld.x, this.tmpWheelWorld.z, this.tmpGroundNormal);
         const normalSpeed = this.tmpWheelVel.dot(this.tmpGroundNormal);
-        const normalForce = Math.max(0, penetration * 65000 - normalSpeed * 5000);
+        const normalForce = Math.max(0, (penetration * 65000 - normalSpeed * 5000) * this.specs.mass / 1040);
         const onRunway = isPointOnRunway(this.tmpWheelWorld.x, this.tmpWheelWorld.z);
         const muRoll = (onRunway ? 0.022 : 0.075) + (inputs.brakes && i > 0 ? 0.55 : 0);
         const wheelForward = this.tmpForward.clone();
@@ -509,8 +527,8 @@ export class FlightPhysicsEngine {
     // 11. Kiểm tra va chạm của Khung thân / Mút cánh / Mũi / Đuôi với địa hình và mặt nước
     const bodyCheckPoints = [
       { pt: new Vector3(0, 0.1, -3.35), label: 'Mũi máy bay và cánh quạt đã va chạm địa hình.' },
-      { pt: new Vector3(-5.45, 0.85, -0.15), label: 'Đầu mút cánh trái đã va chạm địa hình.' },
-      { pt: new Vector3(5.45, 0.85, -0.15), label: 'Đầu mút cánh phải đã va chạm địa hình.' },
+      { pt: new Vector3(-this.specs.wingspan / 2 + 0.05, 0.85, -0.15), label: 'Đầu mút cánh trái đã va chạm địa hình.' },
+      { pt: new Vector3(this.specs.wingspan / 2 - 0.05, 0.85, -0.15), label: 'Đầu mút cánh phải đã va chạm địa hình.' },
       { pt: new Vector3(0, 0.65, 0.0), label: 'Khung cabin đã va chạm địa hình.' },
       { pt: new Vector3(0, 0.42, 4.45), label: 'Đuôi máy bay đã đập mạnh xuống mặt đất.' }
     ];
@@ -530,9 +548,9 @@ export class FlightPhysicsEngine {
     }
 
     // 12. Tích phân Vận tốc Dọc & Vị trí (Semi-Implicit Euler)
-    const accelX = this.tmpForceWorld.x / CESSNA_172_SPECS.mass;
-    const accelY = this.tmpForceWorld.y / CESSNA_172_SPECS.mass;
-    const accelZ = this.tmpForceWorld.z / CESSNA_172_SPECS.mass;
+    const accelX = this.tmpForceWorld.x / this.specs.mass;
+    const accelY = this.tmpForceWorld.y / this.specs.mass;
+    const accelZ = this.tmpForceWorld.z / this.specs.mass;
 
     this.velocity.x += accelX * dt;
     this.velocity.y += accelY * dt;
@@ -541,7 +559,7 @@ export class FlightPhysicsEngine {
     this.position.addScaledVector(this.velocity, dt);
     angularAcceleration(this.angularVel, this.tmpMomentBody, this.bodyInertia, this.tmpAngularAccel);
     this.angularVel.addScaledVector(this.tmpAngularAccel, dt);
-    this.forces.mechanicalEnergyJ = 0.5 * CESSNA_172_SPECS.mass * this.velocity.lengthSq() + CESSNA_172_SPECS.mass * GRAVITY * this.position.y;
+    this.forces.mechanicalEnergyJ = 0.5 * this.specs.mass * this.velocity.lengthSq() + this.specs.mass * GRAVITY * this.position.y;
 
     const omegaLen = this.angularVel.length();
     if (omegaLen > 1e-6) {
@@ -560,7 +578,7 @@ export class FlightPhysicsEngine {
     this.tmpEuler.setFromQuaternion(this.quaternion, 'YXZ');
     const headingRaw = (-MathUtils.radToDeg(this.tmpEuler.y) % 360 + 360) % 360;
     const gsMs = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.z * this.velocity.z);
-    const gLoad = (this.tmpForceWorld.dot(this.tmpUp) + CESSNA_172_SPECS.mass * GRAVITY * this.tmpUp.y) / (CESSNA_172_SPECS.mass * GRAVITY);
+    const gLoad = (this.tmpForceWorld.dot(this.tmpUp) + this.specs.mass * GRAVITY * this.tmpUp.y) / (this.specs.mass * GRAVITY);
 
     const t = this.telemetry;
     t.iasKnots = iasMs * 1.943844;

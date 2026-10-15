@@ -1,10 +1,13 @@
+import { readFileSync } from 'node:fs';
+import { setAlpineElevationData } from '../src/elevation-data';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { nextRenderScale } from '../src/render-budget';
-import { spruceCrown } from '../src/nature-geometry';
 import { WildernessEnvironment } from '../src/terrain';
 import { QUALITY_PRESETS } from '../src/types';
-import { Scene, Vector3 } from '../src/webgl2-three';
+import { InstancedMesh, Scene, Vector3 } from '../src/webgl2-three';
+
+setAlpineElevationData(readFileSync(new URL('../public/assets/terrain/alps.dem', import.meta.url)).buffer as ArrayBuffer);
 
 test('render budget reduces overload and recovers detail with hysteresis', () => {
   assert.ok(nextRenderScale(1, 30) < 1);
@@ -15,15 +18,16 @@ test('render budget reduces overload and recovers detail with hysteresis', () =>
   assert.equal(nextRenderScale(0.7, NaN), 0.7);
 });
 
-test('distant spruce keeps its silhouette with fewer triangles', () => {
-  const detailed = spruceCrown(), distant = spruceCrown(5, 8);
-  assert.ok(distant.indexCount < detailed.indexCount / 3);
-  const height = (positions: Float32Array) => {
-    let value = -Infinity;
-    for (let i = 1; i < positions.length; i += 3) value = Math.max(value, positions[i]);
-    return value;
-  };
-  assert.ok(Math.abs(height(detailed.positions) - height(distant.positions)) < 0.01);
+test('distant forest uses a two triangle impostor covering the full tree height', () => {
+  const environment = new WildernessEnvironment(new Scene(), { ...QUALITY_PRESETS.low, treeCount: 0, rockCount: 0 });
+  const meshes = environment.root.children.filter(child => child instanceof InstancedMesh) as InstancedMesh[];
+  const detailed = meshes.find(mesh => mesh.material.foliage)!;
+  const distant = meshes.find(mesh => mesh.material.treeBillboard)!;
+  assert.equal(distant.geometry.indexCount, 6);
+  assert.ok(detailed.geometry.indexCount > distant.geometry.indexCount * 30);
+  const heights = (positions: Float32Array) => Array.from(positions).filter((_, index) => index % 3 === 1);
+  assert.ok(Math.max(...heights(distant.geometry.positions)) >= Math.max(...heights(detailed.geometry.positions)));
+  assert.ok(Math.min(...heights(distant.geometry.positions)) <= 0);
 });
 
 test('tree LOD restores the full population when the camera returns', () => {

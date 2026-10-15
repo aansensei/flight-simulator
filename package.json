@@ -1,8 +1,8 @@
 {
   "name": "aeronaut-wilderness-flight",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
-  "description": "AERONAUT: Wilderness Flight. Browser flight simulator with force based flight, camera shaders and a 60 km alpine map.",
+  "description": "Browser flight simulator with three aircraft, force based flight, water shaders, radar and a 120 km alpine and karst archipelago world.",
   "type": "module",
   "scripts": {
     "dev": "vite",
