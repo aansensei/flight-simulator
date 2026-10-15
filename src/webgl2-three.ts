@@ -1,3 +1,5 @@
+import { AIRFIELD_SURFACE_GLSL } from './airfield-surface';
+import { BoundingSphere, geometrySphere, RenderFrustum } from './render-culling';
 import { GpuTimer } from './gpu-timer';
 import { CameraEffects } from './camera-effects';
 /**
@@ -622,6 +624,7 @@ export class BufferGeometry {
   uvs: Float32Array;
   colors: Float32Array | null;
   indices: Uint16Array | Uint32Array | null;
+  boundingSphere: BoundingSphere | null = null;
   vao: WebGLVertexArrayObject | null = null;
   gpuBuffers: WebGLBuffer[] = [];
   indexCount = 0;
@@ -706,6 +709,7 @@ export class Material {
 }
 
 export class Mesh extends Object3D {
+  reflectionProxy: InstancedMesh | null = null;
   geometry: BufferGeometry;
   material: Material;
   constructor(geometry: BufferGeometry, material: Material) {
@@ -721,6 +725,8 @@ export class InstancedMesh extends Mesh {
   instanceColors: Float32Array;
   instanceMatrixBuffer: WebGLBuffer | null = null;
   instanceColorBuffer: WebGLBuffer | null = null;
+  instanceMatrixBytes = 0;
+  instanceColorBytes = 0;
   needsInstanceUpload = true;
 
   constructor(geometry: BufferGeometry, material: Material, count: number) {
@@ -1177,6 +1183,10 @@ export class WebGLRenderer {
   private lightProjMatrix = new Matrix4();
   private lightSpaceMatrix = new Matrix4();
   private tempLightEye = new Vector3();
+  private mainFrustum = new RenderFrustum();
+  private reflectionFrustum = new RenderFrustum();
+  private shadowFrustum = new RenderFrustum();
+  private viewProjection = new Matrix4();
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -1767,6 +1777,8 @@ export class WebGLRenderer {
       uniform float uLandcoverReady;
       out vec4 fragColor;
 
+      ${AIRFIELD_SURFACE_GLSL}
+
       float terrainHeight(vec2 p) { return texture(uTerrainHeightField, p / 64000.0 + 0.5).r; }
       float terrainSunShadow(vec3 point) {
         vec2 direction = normalize(uSunDir.xz);
@@ -1904,18 +1916,16 @@ export class WebGLRenderer {
           col = mix(col, photographed, coverage * 0.88 * (1.0 - waterMask) * (1.0 - shoreBlend));
         }
 
-        // Kiểm tra khu vực sân bay và đường băng (Runway tại x = 850, z = [-650..650], y = 18m)
-        float rx = abs(vWorldPos.x - 850.0);
-        float rz = abs(vWorldPos.z - 0.0);
-        if (rx < 65.0 && rz < 1240.0) {
-          float padMask = (1.0 - smoothstep(34.0, 64.0, rx)) * (1.0 - smoothstep(1150.0, 1230.0, rz));
-          col = mix(col, sandGravel * 0.88, padMask * 0.75);
-        }
+        vec2 pavementPixel = max(fwidth(vWorldPos.xz), vec2(0.001));
+        float paint;
+        float pavement = airfieldSurface(vWorldPos.xz, pavementPixel, paint);
+        col = mix(col, vec3(0.045, 0.052, 0.061), pavement);
+        col = mix(col, vec3(0.84), min(pavement, paint));
 
         vec2 detailPos = vWorldPos.xz * 0.32;
         vec2 bump = vec2(vnoise(detailPos + vec2(0.1, 0)) - vnoise(detailPos - vec2(0.1, 0)), vnoise(detailPos + vec2(0, 0.1)) - vnoise(detailPos - vec2(0, 0.1)));
         float detailFade = 1.0 - smoothstep(350.0, 1800.0, length(vWorldPos - uCameraPos));
-        N = normalize(N + vec3(-bump.x, 0, -bump.y) * 0.45 * detailFade);
+        N = normalize(N + vec3(-bump.x, 0, -bump.y) * 0.45 * detailFade * mix(1.0, 0.12, pavement));
         // Chi tiết vi mô
         col *= (0.98 + 0.04 * nMicro);
 
@@ -2175,7 +2185,12 @@ export class WebGLRenderer {
         instancedMesh.instanceMatrixBuffer = gl.createBuffer();
       }
       gl.bindBuffer(gl.ARRAY_BUFFER, instancedMesh.instanceMatrixBuffer);
-      gl.bufferData(gl.ARRAY_BUFFER, instancedMesh.instanceMatrices, gl.DYNAMIC_DRAW);
+      const matrixBytes = instancedMesh.instanceMatrices.byteLength;
+      if (instancedMesh.instanceMatrixBytes !== matrixBytes) {
+        gl.bufferData(gl.ARRAY_BUFFER, matrixBytes, gl.DYNAMIC_DRAW);
+        instancedMesh.instanceMatrixBytes = matrixBytes;
+      }
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, instancedMesh.instanceMatrices, 0, instancedMesh.count * 16);
       const stride = 16 * 4;
       for (let r = 0; r < 4; r++) {
         const loc = 4 + r;
@@ -2188,7 +2203,12 @@ export class WebGLRenderer {
         instancedMesh.instanceColorBuffer = gl.createBuffer();
       }
       gl.bindBuffer(gl.ARRAY_BUFFER, instancedMesh.instanceColorBuffer);
-      gl.bufferData(gl.ARRAY_BUFFER, instancedMesh.instanceColors, gl.DYNAMIC_DRAW);
+      const colorBytes = instancedMesh.instanceColors.byteLength;
+      if (instancedMesh.instanceColorBytes !== colorBytes) {
+        gl.bufferData(gl.ARRAY_BUFFER, colorBytes, gl.DYNAMIC_DRAW);
+        instancedMesh.instanceColorBytes = colorBytes;
+      }
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, instancedMesh.instanceColors, 0, instancedMesh.count * 3);
       gl.enableVertexAttribArray(8);
       gl.vertexAttribPointer(8, 3, gl.FLOAT, false, 0, 0);
       gl.vertexAttribDivisor(8, 1);
@@ -2235,6 +2255,7 @@ export class WebGLRenderer {
     const traverse = (obj: Object3D) => {
       if (!obj.visible) return;
       if (obj instanceof Mesh) {
+        if (obj instanceof InstancedMesh && obj.count === 0) return;
         if (obj.material.shaderType === 'sky') {
           skyMesh = obj;
         } else if (obj.material.transparent) {
@@ -2258,6 +2279,9 @@ export class WebGLRenderer {
     const orthoRadius = 190;
     this.lightProjMatrix.makeOrthographic(-orthoRadius, orthoRadius, orthoRadius, -orthoRadius, 10, 680);
     this.lightSpaceMatrix.multiplyMatrices(this.lightProjMatrix, this.lightViewMatrix);
+    this.shadowFrustum.set(this.lightSpaceMatrix.elements);
+    this.viewProjection.multiplyMatrices(camera.projectionMatrix, camera.viewMatrix);
+    this.mainFrustum.set(this.viewProjection.elements);
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.shadowFbo);
     gl.viewport(0, 0, this.shadowMapSize, this.shadowMapSize);
@@ -2269,6 +2293,7 @@ export class WebGLRenderer {
 
     for (let i = 0; i < shadowCasters.length; i++) {
       const m = shadowCasters[i];
+      if (!this.meshInFrustum(m, this.shadowFrustum)) continue;
       const isInst = m instanceof InstancedMesh;
       this.ensureGeometryVAO(m.geometry, isInst ? (m as InstancedMesh) : undefined);
       const prog = isInst ? this.shadowInstancedProgram : this.shadowProgram;
@@ -2318,7 +2343,7 @@ export class WebGLRenderer {
     // Vẽ các vật thể đặc (Opaque)
     gl.disable(gl.BLEND);
     for (let i = 0; i < opaqueMeshes.length; i++) {
-      this.drawMesh(opaqueMeshes[i], camera);
+      if (this.meshInFrustum(opaqueMeshes[i], this.mainFrustum)) this.drawMesh(opaqueMeshes[i], camera);
     }
 
     transparentMeshes.sort((a, b) => {
@@ -2331,7 +2356,7 @@ export class WebGLRenderer {
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.depthMask(false);
     for (let i = 0; i < transparentMeshes.length; i++) {
-      this.drawMesh(transparentMeshes[i], camera);
+      if (this.meshInFrustum(transparentMeshes[i], this.mainFrustum)) this.drawMesh(transparentMeshes[i], camera);
     }
     gl.depthMask(true);
     gl.disable(gl.BLEND);
@@ -2374,8 +2399,26 @@ export class WebGLRenderer {
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.shadowDepthTex);
     if (sky) { gl.depthMask(false); this.drawMesh(sky, reflected); gl.depthMask(true); }
-    for (const mesh of meshes) this.drawMesh(mesh, reflected);
+    this.viewProjection.multiplyMatrices(reflected.projectionMatrix, reflected.viewMatrix);
+    this.reflectionFrustum.set(this.viewProjection.elements);
+    for (const mesh of meshes) {
+      const proxy = mesh.reflectionProxy;
+      if (proxy && mesh instanceof InstancedMesh) {
+        proxy.count = mesh.count;
+        proxy.matrixWorld.copy(mesh.matrixWorld);
+        proxy.needsInstanceUpload ||= mesh.needsInstanceUpload;
+      }
+      const reflectedMesh = proxy || mesh;
+      if (this.meshInFrustum(reflectedMesh, this.reflectionFrustum)) this.drawMesh(reflectedMesh, reflected);
+    }
     this.reflectionPass = false;
+  }
+
+  private meshInFrustum(mesh: Mesh, frustum: RenderFrustum): boolean {
+    if (mesh instanceof InstancedMesh) return mesh.count > 0;
+    const geometry = mesh.geometry;
+    geometry.boundingSphere ||= geometrySphere(geometry.positions);
+    return frustum.intersects(geometry.boundingSphere, mesh.matrixWorld.elements);
   }
 
   private bindPBRMap(map: MaterialMap | null, unit: number): boolean {

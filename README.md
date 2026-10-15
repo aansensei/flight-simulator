@@ -122,6 +122,18 @@ Va chạm độ cao, camera và radar lấy mặt trên từ tam giác LOD0 đã
 
 Bảy file GLB được đóng gói trong `public/assets/models`, không cần dịch vụ ngoài khi chơi. Lần đầu mở trang cần tải thêm khoảng 17 MB. Ghi nguồn do bộ tài nguyên cung cấp nằm trong `public/assets/models/CREDITS.md`. Bộ đọc hỗ trợ GLB tĩnh có tam giác, transform TRS, texture PNG/JPEG nhúng, UV0 và các chế độ alpha. Các định dạng nén, skin, animation clip và extension bắt buộc chưa được hỗ trợ. Cách đọc màu sRGB, normal và kênh G/B của roughness/metallic theo [đặc tả glTF 2.0 của Khronos](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#materials).
 
+## Đường băng, hiệu năng và điều khiển
+
+Mặt nhựa và vạch sơn sân bay được tính trong cùng fragment địa hình. Chúng dùng chung giá trị độ sâu, xử lý cả đường băng, đường lăn, sân đỗ và đường nối. Vạch kẻ dùng độ phủ theo kích thước pixel và tích phân mẫu đứt đoạn để ổn định khi nhìn xa. Các lớp hình học chỉ cách đất vài centimet đã gây tranh chấp độ sâu trong cảnh có khoảng nhìn 180 km. Giới hạn này được mô tả trong [OpenGL depth buffer FAQ](https://www.opengl.org/archives/resources/faq/technical/depthbuffer.htm).
+
+Renderer loại vật thể ngoài khung nhìn riêng cho camera chính, phản chiếu hồ và shadow map. Cây gần dùng hình ảnh thay thế trong phản chiếu, giữ hình học chi tiết ở lượt vẽ chính. Bộ đệm instance tái sử dụng vùng nhớ GPU và chỉ cập nhật các instance đang hoạt động. Đá không được sinh trên mặt nhựa, kể cả hai đầu đường băng và sân đỗ. Chế độ Mượt ưu tiên thời gian GPU khi có phép đo, dùng FPS khi trình duyệt không cung cấp bộ đếm GPU.
+
+Trang đo nội bộ: chạy `npm run dev`, mở http://127.0.0.1:5173/flight-simulator/tools/render-check.html rồi bấm **Measure all views**. Trang giữ đầu ra 1280 × 720, đo bốn góc camera cố định. Mỗi góc bỏ 120 frame khởi động, lấy trung vị 240 frame tiếp theo. Mức Low/High/Ultra thay đổi mật độ hình học và bóng đổ trong cùng độ phân giải. Trang này dùng khi phát triển, không phải màn hình chơi và không được đưa vào bản build Pages.
+
+Phép đối chiếu High ở 1280 × 720 trên trình duyệt Windows hiện tại ghi nhận 204 lệnh vẽ mỗi frame ở bản 1.5.0. Bản sửa dùng 49 ở góc xa, 57 khi tiếp cận, 45 trên đường băng và 23 khi quay khỏi sân bay. Số lệnh vẽ giảm khoảng 72% đến 89%. Thời gian CPU render trong phép đo lặp lại giảm từ khoảng 0,9 đến 1,0 ms xuống 0,3 đến 0,4 ms. GPU và FPS còn phụ thuộc thiết bị, nhiệt độ, độ phân giải, phần mềm chạy nền và giới hạn màn hình. Không thể suy ra cùng một mức tăng FPS cho mọi máy. Cách giảm lệnh vẽ và cập nhật buffer tham khảo [WebGL best practices của MDN](https://developer.mozilla.org/en-US/docs/Web/API/WebGL_API/WebGL_best_practices).
+
+Assisted giới hạn yêu cầu nghiêng cánh khoảng 23 độ, tăng giảm mục tiêu góc theo thời gian và tự cân bằng cánh khi thả A/D. Chuột có vùng trung tính khoảng 4,5% và phản hồi nhẹ quanh tâm. Shift/Ctrl ở cả hai bên bàn phím đều chỉnh ga. Lực nâng, lực cản, mô men và ngân sách công suất vẫn quyết định chuyển động. Chế độ Simulation giữ điều khiển bề mặt trực tiếp.
+
 ## Vật lý và giới hạn
 
 Vật lý chạy 120 Hz, xử lý tối đa 24 bước mỗi frame và nội suy quaternion. Có trọng lực, mật độ khí quyển theo độ cao, vận tốc tương đối gió, lift theo góc tấn và flap, drag ký sinh và cảm ứng, lift giảm liên tục sau stall, công suất động cơ và actuator disk propeller. Công suất hữu ích T × V không vượt công suất cung cấp. Mô men quay có thành phần gyroscopic của phương trình Euler.

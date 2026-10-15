@@ -1,3 +1,4 @@
+import { approachCommand } from './control-response';
 import { AIRCRAFT_PROFILES, AircraftId } from './aircraft-specs';
 import { BAY_CENTER } from './archipelago';
 /**
@@ -62,6 +63,8 @@ export class FlightPhysicsEngine {
   currentWindVel = new Vector3(0, 0, 0);
   simTime = 0;
   private accumulator = 0;
+  private assistedPitchTarget = 0.045;
+  private assistedBankTarget = 0;
 
   // Trạng thái tiếp đất & hạ cánh
   wasOnGround = false;
@@ -203,6 +206,9 @@ export class FlightPhysicsEngine {
       this.touchdownChecked = true;
     }
 
+    this.tmpEuler.setFromQuaternion(this.quaternion, 'YXZ');
+    this.assistedPitchTarget = this.tmpEuler.x;
+    this.assistedBankTarget = this.tmpEuler.z;
     this.prevPosition.copy(this.position);
     this.renderPosition.copy(this.position);
     this.prevQuaternion.copy(this.quaternion);
@@ -313,15 +319,17 @@ export class FlightPhysicsEngine {
     let yawTarget = rawYawCmd * sensitivity;
     if (mode === 'assisted') {
       const ground = this.wasOnGround;
-      let desiredPitch = ground ? rawPitchCmd * 0.18 : 0.045 + rawPitchCmd * 0.16 * sensitivity;
+      let desiredPitch = ground ? rawPitchCmd * 0.18 : MathUtils.clamp(0.045 + rawPitchCmd * 0.16 * sensitivity, -0.13, 0.24);
       if (!ground && rawPitchCmd > 0.6 && this.flapIndex === 0) {
         // Elevator feedback trades airspeed for height while respecting available engine power.
-        const climbPitch = MathUtils.clamp(0.10 + (this.telemetry.iasKnots - this.profile.bestClimbKnots) * 0.018, -0.06, 0.38);
+        const climbPitch = MathUtils.clamp(0.10 + (this.telemetry.iasKnots - this.profile.bestClimbKnots) * 0.018, -0.06, 0.30);
         desiredPitch = MathUtils.lerp(desiredPitch, climbPitch, MathUtils.clamp((rawPitchCmd - 0.6) / 0.4, 0, 1));
       }
-      const desiredBank = -rawRollCmd * 0.48 * sensitivity;
-      pitchTarget = (desiredPitch - pitchRad) * 2.5 - this.angularVel.x * 0.65;
-      rollTarget = -(desiredBank - rollRad) * 1.8 + this.angularVel.z * 0.5;
+      const desiredBank = -MathUtils.clamp(rawRollCmd * sensitivity, -1, 1) * 0.40;
+      this.assistedPitchTarget = approachCommand(this.assistedPitchTarget, desiredPitch, MathUtils.degToRad(9), dt);
+      this.assistedBankTarget = approachCommand(this.assistedBankTarget, desiredBank, MathUtils.degToRad(45), dt);
+      pitchTarget = (this.assistedPitchTarget - pitchRad) * 2.5 - this.angularVel.x * 0.65;
+      rollTarget = -(this.assistedBankTarget - rollRad) * 1.8 + this.angularVel.z * 0.5;
       const desiredYawRate = Math.sin(rollRad) * GRAVITY / Math.max(20, this.velocity.length());
       yawTarget += (desiredYawRate - this.angularVel.y) * 0.5;
     }

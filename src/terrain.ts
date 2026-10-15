@@ -1,3 +1,5 @@
+import { RUNWAY_CONFIG, isAirfieldPavement } from './airfield-surface';
+export { RUNWAY_CONFIG } from './airfield-surface';
 import { detailedIslandsRoot, updateDetailedIslandLOD } from './detailed-islands';
 import { forestDensityAt } from './landcover';
 import { sampleAlpineElevation } from './elevation-data';
@@ -24,15 +26,6 @@ import { QualityConfig } from './types';
 export const WORLD_SIZE = 120000; // 120 km × 120 km
 export const LAKE_LEVEL = 0.0;   // Mực nước hồ (0.0 m MSL = 1,800 ft Alpine Valley datum)
 export const VALLEY_DATUM_FEET = 1800; // Cao độ cơ sở của thung lũng so với mực nước biển (1,800 ft)
-
-// Cấu hình đường băng Alpine Airfield (nằm ở bờ đông của hồ)
-export const RUNWAY_CONFIG = {
-  centerX: 850.0,
-  centerZ: 0.0,
-  width: 48.0,
-  length: 2200.0,
-  elevation: 16.0 // Cao hơn mặt hồ 16m trên thềm bình nguyên phẳng
-};
 
 // Hàm băm xác định (deterministic hash) phục vụ tạo địa hình và rải cây
 function hash2D(ix: number, iz: number): number {
@@ -225,6 +218,7 @@ export class WildernessEnvironment {
 
   private releaseMesh(mesh: Mesh): void {
     if (!this.gl) return;
+    if (mesh.reflectionProxy) this.releaseMesh(mesh.reflectionProxy);
     for (const buffer of mesh.geometry.gpuBuffers) this.gl.deleteBuffer(buffer);
     mesh.geometry.gpuBuffers = [];
     this.gl.deleteVertexArray(mesh.geometry.vao);
@@ -262,44 +256,7 @@ export class WildernessEnvironment {
     const ry = RUNWAY_CONFIG.elevation;
     const rz = RUNWAY_CONFIG.centerZ;
 
-    // 1. Nền đường băng nhựa đường (Asphalt Runway)
-    const rwyGeo = GeometryBuilder.createPlane(RUNWAY_CONFIG.width, RUNWAY_CONFIG.length, 4, 32, false);
-    const rwyMat = new Material({ color: 0x2b2e33, roughness: 0.82, metalness: 0.04 });
-    const rwyMesh = new Mesh(rwyGeo, rwyMat);
-    rwyMesh.position.set(rx, ry + 0.08, rz);
-    rwyMesh.receiveShadow = true;
-    airfieldGroup.add(rwyMesh);
-
-    // 2. Vạch kẻ đường băng trắng (Centerline, Thresholds & Aiming Point Markers)
     const stripeMat = new Material({ color: 0xefefef, roughness: 0.6, metalness: 0.02 });
-    const dashGeo = GeometryBuilder.createPlane(0.85, 22.0, 1, 1, false);
-    for (let z = -RUNWAY_CONFIG.length / 2 + 100; z <= RUNWAY_CONFIG.length / 2 - 100; z += 44) {
-      const dash = new Mesh(dashGeo, stripeMat);
-      dash.position.set(rx, ry + 0.12, rz + z);
-      airfieldGroup.add(dash);
-    }
-    const threshGeo = GeometryBuilder.createPlane(1.4, 26.0, 1, 1, false);
-    for (const endZ of [-RUNWAY_CONFIG.length / 2 + 35, RUNWAY_CONFIG.length / 2 - 35]) {
-      for (let ix = -12; ix <= 12; ix += 3.2) {
-        if (Math.abs(ix) < 2) continue;
-        const bar = new Mesh(threshGeo, stripeMat);
-        bar.position.set(rx + ix, ry + 0.12, rz + endZ);
-        airfieldGroup.add(bar);
-      }
-    }
-
-    // 3. Đường lăn (Taxiway) & Sân đỗ (Apron) + Nhà chứa máy bay (Hangar) + Tháp điều khiển nhỏ
-    const apronGeo = GeometryBuilder.createPlane(180, 320, 2, 2, false);
-    const apronMesh = new Mesh(apronGeo, rwyMat);
-    apronMesh.position.set(rx + 130, ry + 0.07, rz + 120);
-    airfieldGroup.add(apronMesh);
-
-    const taxiway = new Mesh(GeometryBuilder.createPlane(20, RUNWAY_CONFIG.length - 120, 1, 12, false), rwyMat);
-    taxiway.position.set(rx + 65, ry + 0.07, rz); airfieldGroup.add(taxiway);
-    for (const z of [-850, 0, 850]) {
-      const connector = new Mesh(GeometryBuilder.createPlane(90, 24, 1, 1, false), rwyMat);
-      connector.position.set(rx + 35, ry + 0.07, rz + z); airfieldGroup.add(connector);
-    }
     const hangarWallMat = new Material({ color: 0xd8dde4, roughness: 0.55, metalness: 0.25 });
     const hangarRoofMat = new Material({ color: 0x264b73, roughness: 0.48, metalness: 0.35 });
     const woodMat = new Material({ color: 0x6b472c, roughness: 0.78, metalness: 0.02 });
@@ -524,6 +481,11 @@ export class WildernessEnvironment {
     for (let i = 1; i < farGeo.positions.length; i += 3) farGeo.positions[i] += 7;
     this.farTreeMesh = new InstancedMesh(farGeo, new Material({ treeBillboard: true, doubleSided: true, roughness: 1 }), quality.treeCount);
     this.farTreeMesh.count = 0;
+    const reflectionGeo = new BufferGeometry({ positions: farGeo.positions, normals: farGeo.normals, uvs: farGeo.uvs, indices: farGeo.indices! });
+    const reflectionTrees = new InstancedMesh(reflectionGeo, this.farTreeMesh.material, 0);
+    reflectionTrees.instanceMatrices = this.treeInstancedMesh.instanceMatrices;
+    reflectionTrees.instanceColors = this.treeInstancedMesh.instanceColors;
+    this.treeInstancedMesh.reflectionProxy = reflectionTrees;
     this.root.add(this.farTreeMesh);
     this.lastTreeFocus.set(Infinity, Infinity, Infinity);
     this.treeInstancedMesh.count = placedTrees;
@@ -545,7 +507,7 @@ export class WildernessEnvironment {
       const dist = 250 + Math.pow(hash2D(rSeed, 22), 0.8) * 5800;
       const rx = Math.cos(angle) * dist;
       const rz = Math.sin(angle) * dist;
-      if (Math.abs(rx - RUNWAY_CONFIG.centerX) < 120 && Math.abs(rz - RUNWAY_CONFIG.centerZ) < 720) continue;
+      if (isAirfieldPavement(rx, rz, 12)) continue;
       const ry = getSurfaceHeight(rx, rz);
       if (ry < 0.2 || ry > 680) continue;
       const sx = 0.8 + hash2D(rSeed, 33) * 2.8;

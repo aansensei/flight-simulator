@@ -823,7 +823,7 @@ export class AeronautWildernessApp {
       if (this.resolutionCooldown <= 0) {
         this.resolutionCooldown = 1.5;
         const gpu = this.renderer.gpuTimer.milliseconds;
-        const measuredMs = Math.max(gpu, 1000 / Math.max(1, this.currentFps));
+        const measuredMs = gpu > 0 ? gpu : 1000 / Math.max(1, this.currentFps);
         const scale = nextRenderScale(this.renderer.dynamicScale, measuredMs);
         if (scale !== this.renderer.dynamicScale) {
           this.renderer.dynamicScale = scale;

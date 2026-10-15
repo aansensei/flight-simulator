@@ -1,6 +1,6 @@
 {
   "name": "aeronaut-wilderness-flight",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "private": true,
   "description": "Browser flight simulator with three aircraft, force based flight, water shaders, radar and a 120 km alpine and karst archipelago world.",
   "type": "module",

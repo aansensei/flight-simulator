@@ -1,3 +1,4 @@
+import { flightMouseAxis } from './control-response';
 /**
  * AERONAUT: Wilderness Flight
  * Module: src/controls.ts
@@ -55,7 +56,7 @@ export class InputController {
       'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
       'Equal', 'NumpadAdd', 'Minus', 'NumpadSubtract',
       'KeyG', 'KeyB', 'KeyT', 'KeyY', 'KeyC', 'KeyH',
-      'ShiftLeft', 'ControlLeft', 'KeyV', 'KeyP', 'KeyR', 'KeyF', 'KeyM', 'KeyN', 'KeyX', 'Space'
+      'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight', 'KeyV', 'KeyP', 'KeyR', 'KeyF', 'KeyM', 'KeyN', 'KeyX', 'Space'
     ]);
 
     window.addEventListener('keydown', (e: KeyboardEvent) => {
@@ -220,8 +221,8 @@ export class InputController {
   getControlInputs(): ControlInputs {
     const p = this.pressedCodes;
     return {
-      pitchAxis: this.mouseFlight && !p.has('KeyS') && !p.has('KeyW') && !p.has('ArrowUp') && !p.has('ArrowDown') ? this.mousePitch : undefined,
-      rollAxis: this.mouseFlight && !p.has('KeyA') && !p.has('KeyD') && !p.has('ArrowLeft') && !p.has('ArrowRight') ? this.mouseRoll : undefined,
+      pitchAxis: this.mouseFlight && !p.has('KeyS') && !p.has('KeyW') && !p.has('ArrowUp') && !p.has('ArrowDown') ? flightMouseAxis(this.mousePitch) : undefined,
+      rollAxis: this.mouseFlight && !p.has('KeyA') && !p.has('KeyD') && !p.has('ArrowLeft') && !p.has('ArrowRight') ? flightMouseAxis(this.mouseRoll) : undefined,
       // W hoặc Mũi tên Lên: chúi mũi xuống (pitch down); S hoặc Mũi tên Xuống: kéo mũi lên (pitch up)
       pitchDown: p.has('KeyW') || p.has('ArrowUp'),
       pitchUp: p.has('KeyS') || p.has('ArrowDown'),
@@ -229,8 +230,8 @@ export class InputController {
       rollRight: p.has('KeyD') || p.has('ArrowRight'),
       yawLeft: p.has('KeyQ'),
       yawRight: p.has('KeyE'),
-      throttleUp: p.has('Equal') || p.has('NumpadAdd') || p.has('ShiftLeft'),
-      throttleDown: p.has('Minus') || p.has('NumpadSubtract') || p.has('ControlLeft'),
+      throttleUp: p.has('Equal') || p.has('NumpadAdd') || (p.has('ShiftLeft') || p.has('ShiftRight')),
+      throttleDown: p.has('Minus') || p.has('NumpadSubtract') || (p.has('ControlLeft') || p.has('ControlRight')),
       brakes: p.has('KeyB'),
       trimUp: p.has('KeyT'),
       trimDown: p.has('KeyY')

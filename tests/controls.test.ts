@@ -20,6 +20,13 @@ test('M toggles radar, N toggles sound, paused shortcuts work and held keys do n
   assert.deepEqual(actions, ['radar']);
   key('KeyN'); key('KeyN', true);
   assert.deepEqual(actions, ['radar', 'sound']);
+  key('ShiftRight');
+  assert.equal(controller.getControlInputs().throttleUp, true);
+  keyboard.dispatchEvent(Object.assign(new Event('keyup'), { code: 'ShiftRight' }));
+  assert.equal(controller.getControlInputs().throttleUp, false);
+  key('ControlRight');
+  assert.equal(controller.getControlInputs().throttleDown, true);
+  controller.clearAllKeys();
   controller.isGameActive = false;
   key('KeyM'); key('KeyN');
   assert.deepEqual(actions, ['radar', 'sound', 'radar', 'sound']);
