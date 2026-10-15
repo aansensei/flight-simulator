@@ -94,6 +94,10 @@ Shader có PBR, ACES, sương khí quyển, Fresnel và sóng nước, bóng PCF
 
 ## Vật liệu và nguồn nghiên cứu
 
+Mặt đất vùng Alps kết hợp ảnh vệ tinh Sentinel 2016 từ EOX với texture chi tiết. Các mảng đá, rừng và đất được lấy từ ảnh thay vì chỉ lặp màu cỏ. 144 ô ảnh zoom 13 được đóng gói cùng game, ghép trong bộ nhớ, dùng cùng phép ánh xạ địa lý với DEM. Phân bố cây có thêm mặt nạ dựa trên màu và độ sáng ảnh, đây là nhận dạng thảm phủ gần đúng. Ảnh có độ phân giải cỡ chục mét và ánh sáng chụp sẵn, nên không thay thế được tài nguyên 3D chi tiết ở sát mặt đất. Lần đầu mở game cần tải thêm ảnh, những lần sau trình duyệt có thể dùng cache.
+
+Data & Viewing Products: [EOxCloudless](https://cloudless.eox.at) by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2016), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Lớp 2016 và giấy phép được xác nhận trong [WMTS capabilities](https://tiles.maps.eox.at/wmts/1.0.0/WMTSCapabilities.xml). Bản 2016 được chọn để giữ quyền dùng và phân phối theo CC BY, không sử dụng các lớp năm mới có giới hạn phi thương mại.
+
 Núi dùng DEM vùng Alps N46E007 từ Mapzen Terrain Tiles, được lấy mẫu lại thành lưới 1025 × 1025. Game xoay và đổi tỷ lệ tọa độ, hạ cao độ nền, nén độ cao địa hình 0,65 lần rồi tạo thung lũng, hồ, sân bay và bờ biển cho gameplay. Vì thế đây là cảnh quan được thiết kế dựa trên địa hình đo cao, không phải bản sao địa lý chính xác. Dữ liệu chạm đất dùng cùng tam giác đã dựng, không dùng DEM thô độc lập.
 
 Nguồn địa hình: [Mapzen Terrain Tiles trên AWS](https://registry.opendata.aws/terrain-tiles/), [ghi nguồn và giấy phép](https://github.com/tilezen/joerd/blob/master/docs/attribution.md). Produced using Copernicus data and information funded by the European Union, EU-DEM layers. Global GMTED2010 and SRTM data courtesy of the U.S. Geological Survey.

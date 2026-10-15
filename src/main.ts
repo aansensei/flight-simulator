@@ -1,3 +1,4 @@
+import { getLandcoverAtlas, loadLandcover } from './landcover';
 import { loadAlpineElevationData } from './elevation-data';
 import { AIRCRAFT_PROFILES, AircraftId } from './aircraft-specs';
 import { nextRenderScale } from './render-budget';
@@ -87,7 +88,12 @@ export class AeronautWildernessApp {
 
   private async loadTerrainAndBoot(): Promise<void> {
     this.setLoadingStatus('Đang tải dữ liệu đo cao Alps và vật liệu cảnh quan...');
-    try { await loadAlpineElevationData(); this.bootWithRealLoadingSteps(); }
+    try {
+      await loadAlpineElevationData();
+      this.setLoadingStatus('Đang tải ảnh vệ tinh Sentinel vùng Alps, lần đầu cần tải thêm dữ liệu...');
+      await loadLandcover((loaded, total) => this.setLoadingStatus(`Đang tải ảnh vệ tinh Sentinel: ${loaded}/${total} ô ảnh...`));
+      this.bootWithRealLoadingSteps();
+    }
     catch (error) { this.showRuntimeError((error as Error).message); }
   }
 
@@ -102,6 +108,8 @@ export class AeronautWildernessApp {
       try {
         this.renderer = new WebGLRenderer(this.canvas);
         this.scene = new Scene();
+        const landcover = getLandcoverAtlas();
+        if (landcover) this.renderer.setLandcoverMap(landcover.canvas, landcover.manifest);
 
         this.setLoadingStatus('Đang dựng hình học 3D Cessna 172 Skyhawk & bảng đồng hồ buồng lái...');
         requestAnimationFrame(() => {

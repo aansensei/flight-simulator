@@ -1,3 +1,4 @@
+import { forestDensityAt } from './landcover';
 import { sampleAlpineElevation } from './elevation-data';
 import { createIslandGeometry, getIslandHeight, islands } from './archipelago';
 import { spruceCrown } from './nature-geometry';
@@ -484,11 +485,12 @@ export class WildernessEnvironment {
 
       // Phân cụm tự nhiên bằng noise
       const cluster = valueNoise2D(tx * 0.0045, tz * 0.0045);
-      if (cluster < 0.28) continue;
+      if (cluster < 0.28 || hash2D(seed, 909) > forestDensityAt(tx, tz)) continue;
 
       // Không mọc trên đường băng và sân đỗ
       if (Math.abs(tx - RUNWAY_CONFIG.centerX) < 95 && Math.abs(tz - RUNWAY_CONFIG.centerZ) < 3400) continue;
 
+      if (Math.abs(tx - RUNWAY_CONFIG.centerX) < 280 && Math.abs(tz - RUNWAY_CONFIG.centerZ) < 450) continue;
       const ty = getSurfaceHeight(tx, tz);
       // Không mọc dưới nước (< 3.5m) hoặc cao hơn giới hạn cây (1.000 m)
       if (ty < 3.5 || ty > 1000.0) continue;

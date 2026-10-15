@@ -1,0 +1,11 @@
+{
+  "zoom": 13,
+  "tileSize": 256,
+  "columns": 12,
+  "rows": 12,
+  "startX": 4265,
+  "startY": 2887,
+  "source": "EOxCloudless 2016",
+  "license": "CC BY 4.0",
+  "template": "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless_3857/default/g/{z}/{y}/{x}.jpg"
+}

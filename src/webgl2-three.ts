@@ -1153,6 +1153,8 @@ export class WebGLRenderer {
   private treePrototype: Mesh | null = null;
   private treeAtlasDirty = true;
   private bakingTree = false;
+  private landcoverTexture: WebGLTexture | null = null;
+  private landcoverBounds = [0, 0, 1, 1];
   private waterCenter = new Vector3();
 
   private lightViewMatrix = new Matrix4();
@@ -1190,6 +1192,28 @@ export class WebGLRenderer {
     this.initFoliageMaterials();
     this.initShaders();
     this.initShadowMap(this.shadowMapSize);
+  }
+
+  setLandcoverMap(canvas: HTMLCanvasElement, bounds: { startX: number; startY: number; columns: number; rows: number }): void {
+    const gl = this.gl;
+    let source = canvas;
+    const maxSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+    if (Math.max(canvas.width, canvas.height) > maxSize) {
+      const reduced = document.createElement('canvas');
+      const scale = maxSize / Math.max(canvas.width, canvas.height);
+      reduced.width = Math.floor(canvas.width * scale); reduced.height = Math.floor(canvas.height * scale);
+      reduced.getContext('2d')!.drawImage(canvas, 0, 0, reduced.width, reduced.height); source = reduced;
+    }
+    if (!this.landcoverTexture) this.landcoverTexture = gl.createTexture();
+    this.landcoverBounds = [bounds.startX, bounds.startY, bounds.columns, bounds.rows];
+    gl.activeTexture(gl.TEXTURE11); gl.bindTexture(gl.TEXTURE_2D, this.landcoverTexture);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.generateMipmap(gl.TEXTURE_2D); gl.activeTexture(gl.TEXTURE0);
   }
 
   setForestGeometry(geometry: BufferGeometry): void {
@@ -1371,6 +1395,7 @@ export class WebGLRenderer {
   private initShaders(): void {
     const commonUniforms = [
       'uModel', 'uView', 'uProj', 'uLightSpace',
+      'uLandcover', 'uLandcoverBounds', 'uLandcoverReady',
       'uTreeBillboard', 'uTreeAtlas', 'uBakingTree',
       'uCameraPos', 'uSunDir', 'uSunColor', 'uSkyZenith', 'uSkyHorizon', 'uGroundColor',
       'uFogColor', 'uFogDensity', 'uCloudImmersion', 'uTime',
@@ -1695,6 +1720,9 @@ export class WebGLRenderer {
       uniform sampler2D uRockNormal;
       uniform float uTerrainMaterials;
       uniform sampler2D uTerrainHeightField;
+      uniform sampler2D uLandcover;
+      uniform vec4 uLandcoverBounds;
+      uniform float uLandcoverReady;
       out vec4 fragColor;
 
       float terrainHeight(vec2 p) { return texture(uTerrainHeightField, p / 64000.0 + 0.5).r; }
@@ -1819,6 +1847,19 @@ export class WebGLRenderer {
           vec3 detailedNormal = rockNormal(vWorldPos * 0.045, weights, N);
           float fade = 1.0 - smoothstep(500.0, 4500.0, length(vWorldPos - uCameraPos));
           N = normalize(mix(N, detailedNormal, rockMask * fade * 0.45));
+        }
+
+        if (uLandcoverReady > 0.5 && coastal < 1.0) {
+          float latitude = radians(clamp(46.63 + vWorldPos.x / 111320.0, -85.0, 85.0));
+          float longitude = 7.70 - vWorldPos.z / 62000.0;
+          vec2 tile = vec2((longitude + 180.0) / 360.0, (1.0 - log(tan(0.785398163 + latitude * 0.5)) / 3.141592653) * 0.5) * 8192.0;
+          vec2 uv = (tile - uLandcoverBounds.xy) / uLandcoverBounds.zw;
+          float edge = min(min(uv.x, uv.y), min(1.0 - uv.x, 1.0 - uv.y));
+          float coverage = smoothstep(0.0, 0.06, edge) * (1.0 - coastal);
+          vec3 satellite = texture(uLandcover, clamp(uv, 0.001, 0.999)).rgb;
+          float waterMask = smoothstep(0.01, 0.07, satellite.b - max(satellite.r, satellite.g));
+          vec3 photographed = pow(satellite, vec3(2.2)) * 1.65;
+          col = mix(col, photographed, coverage * 0.88 * (1.0 - waterMask) * (1.0 - shoreBlend));
         }
 
         // Kiểm tra khu vực sân bay và đường băng (Runway tại x = 850, z = [-650..650], y = 18m)
@@ -2354,6 +2395,11 @@ export class WebGLRenderer {
       gl.activeTexture(gl.TEXTURE9); gl.bindTexture(gl.TEXTURE_2D, this.terrainHeightTexture);
       if (u['uTerrainHeightField']) gl.uniform1i(u['uTerrainHeightField'], 9);
       if (u['uTerrainMaterials']) gl.uniform1f(u['uTerrainMaterials'], this.terrainMaterialsReady ? 1 : 0);
+      gl.activeTexture(gl.TEXTURE11); gl.bindTexture(gl.TEXTURE_2D, this.landcoverTexture);
+      if (u['uLandcover']) gl.uniform1i(u['uLandcover'], 11);
+      if (u['uLandcoverBounds']) gl.uniform4f(u['uLandcoverBounds'], this.landcoverBounds[0], this.landcoverBounds[1], this.landcoverBounds[2], this.landcoverBounds[3]);
+      if (u['uLandcoverReady']) gl.uniform1f(u['uLandcoverReady'], this.landcoverTexture ? 1 : 0);
+
       gl.activeTexture(gl.TEXTURE0);
     }
     if (u['uFoliage']) gl.uniform1f(u['uFoliage'], mat.foliage ? 1 : 0);
